@@ -2,9 +2,13 @@ import sys
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QPushButton, QFrame, QLabel, QLineEdit,
+<<<<<<< HEAD
                            QGridLayout, QMessageBox, QStatusBar, QProgressDialog)
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QColor, QPixmap
 from PyQt5.QtCore import Qt, QSize
+=======
+                           QGridLayout, QMessageBox, QStatusBar)
+>>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
@@ -141,11 +145,14 @@ class MeshViewerQt(QMainWindow):
         create_face_btn.clicked.connect(self.create_face)
         face_layout.addWidget(create_face_btn)
         
+<<<<<<< HEAD
         # 删除选中面按钮
         delete_face_btn = QPushButton('删除选中面')
         delete_face_btn.clicked.connect(self.delete_selected_faces)
         face_layout.addWidget(delete_face_btn)
         
+=======
+>>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
         # 清除选择按钮
         clear_selection_btn = QPushButton('清除选择')
         clear_selection_btn.clicked.connect(self.clear_selection)
@@ -193,6 +200,7 @@ class MeshViewerQt(QMainWindow):
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(0, 0, 0, 0)
         
+<<<<<<< HEAD
         # 创建水平布局来放置VTK窗口和自由边按钮
         vtk_container = QHBoxLayout()
         
@@ -423,6 +431,10 @@ class MeshViewerQt(QMainWindow):
         right_layout.addLayout(vtk_container, stretch=1)
         
         # 注意：自由边按钮已经添加到vtk_frame中，不需要再添加到btn_container
+=======
+        # 添加VTK窗口
+        right_layout.addWidget(self.vtk_widget, stretch=1)
+>>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
         
         # 创建状态指示器面板
         status_panel = QFrame()
@@ -495,6 +507,7 @@ class MeshViewerQt(QMainWindow):
         # VTK相关初始化
         self.renderer = vtk.vtkRenderer()
         self.renderer.SetBackground(1.0, 1.0, 1.0)
+<<<<<<< HEAD
         
         # 获取渲染窗口并启用性能优化
         render_window = self.vtk_widget.GetRenderWindow()
@@ -519,6 +532,15 @@ class MeshViewerQt(QMainWindow):
         self.renderer.SetUseFXAA(False)  # 禁用FXAA抗锯齿
         self.renderer.SetTwoSidedLighting(False)  # 禁用双面光照
         
+=======
+        self.vtk_widget.GetRenderWindow().AddRenderer(self.renderer)
+        self.iren = self.vtk_widget.GetRenderWindow().GetInteractor()
+        
+        # 设置交互器样式
+        style = vtk.vtkInteractorStyleTrackballCamera()
+        self.iren.SetInteractorStyle(style)
+        
+>>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
         # 重新设置事件观察器
         self.iren.RemoveObservers("LeftButtonPressEvent")
         self.iren.RemoveObservers("MouseMoveEvent")
@@ -528,10 +550,13 @@ class MeshViewerQt(QMainWindow):
         self.iren.AddObserver("MouseMoveEvent", self.on_mouse_move)
         self.iren.AddObserver("LeftButtonReleaseEvent", self.on_left_button_release)
         
+<<<<<<< HEAD
         # 设置交互器的性能优化选项
         self.iren.SetDesiredUpdateRate(30.0)  # 设置期望的更新率
         self.iren.SetStillUpdateRate(0.001)  # 静止时的更新率
         
+=======
+>>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
         # 初始化显示
         self.update_display()
         self.reset_camera()
@@ -867,6 +892,7 @@ class MeshViewerQt(QMainWindow):
             print("没有选中的面可删除")
             return
         
+<<<<<<< HEAD
         # 创建面片的mask
         face_mask = np.ones(len(self.mesh_data['faces']), dtype=bool)
         face_mask[self.selected_faces] = False
@@ -878,6 +904,14 @@ class MeshViewerQt(QMainWindow):
         if 'normals' in self.mesh_data:
             # 对于球体，法向量就是归一化的顶点坐标
             self.mesh_data['normals'] = self.mesh_data['vertices'] / np.linalg.norm(self.mesh_data['vertices'], axis=1)[:, np.newaxis]
+=======
+        mask = np.ones(len(self.mesh_data['faces']), dtype=bool)
+        mask[self.selected_faces] = False
+        
+        self.mesh_data['faces'] = self.mesh_data['faces'][mask]
+        if 'normals' in self.mesh_data:
+            self.mesh_data['normals'] = self.mesh_data['normals'][mask]
+>>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
         
         self.selected_faces = []
         print("已删除选中的面")
@@ -951,6 +985,7 @@ class MeshViewerQt(QMainWindow):
         self.selected_edges = []
         self.selected_faces = []
         self.update_display()
+<<<<<<< HEAD
         print("已清除所有选择") 
 
     def select_free_edges(self):
@@ -1434,3 +1469,6 @@ class MeshViewerQt(QMainWindow):
                 
         finally:
             progress.close()
+=======
+        print("已清除所有选择") 
+>>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762

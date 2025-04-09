@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Python
 __pycache__/
 *.py[cod]
@@ -28,3 +29,6 @@ build/
 # Project specific
 data/*.stl
 data/*.nas
+=======
+ 
+>>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
