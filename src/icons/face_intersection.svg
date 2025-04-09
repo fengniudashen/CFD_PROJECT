@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="32" height="32" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <g fill="none" stroke="#000" stroke-width="2">
+    <!-- 第一个三角形 -->
+    <path d="M8,8 L24,8 L16,22 Z" stroke="#00A0FF" fill-opacity="0.3" fill="#00A0FF"/>
+    <!-- 第二个三角形 -->
+    <path d="M6,12 L22,12 L14,26 Z" stroke="#FF6B6B" fill-opacity="0.3" fill="#FF6B6B"/>
+  </g>
+</svg>

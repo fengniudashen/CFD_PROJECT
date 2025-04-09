@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="32" height="32" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(4,4)">
+    <!-- 高质量面片（绿色三角形） -->
+    <path d="M 2,20 L 8,8 L 14,20 Z" fill="none" stroke="#00ff00" stroke-width="2"/>
+    <!-- 中等质量面片（黄色三角形） -->
+    <path d="M 12,20 L 18,8 L 24,20 Z" fill="none" stroke="#ffcc00" stroke-width="2"/>
+  </g>
+</svg>
