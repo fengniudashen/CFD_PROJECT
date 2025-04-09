@@ -2,18 +2,17 @@ import sys
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QPushButton, QFrame, QLabel, QLineEdit,
-<<<<<<< HEAD
-                           QGridLayout, QMessageBox, QStatusBar, QProgressDialog)
+                           QGridLayout, QMessageBox, QStatusBar, QProgressDialog, QInputDialog,
+                           QTabWidget)
 from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QColor, QPixmap
-from PyQt5.QtCore import Qt, QSize
-=======
-                           QGridLayout, QMessageBox, QStatusBar)
->>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
+from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 import vtkmodules.all as vtk
 from typing import Dict
+import time
+import gc  # 用于垃圾回收
 
 class StatusIndicator(QFrame):
     def __init__(self, title, parent=None):
@@ -68,6 +67,26 @@ class MeshViewerQt(QMainWindow):
         self.moved_since_press = False
         self.press_pos = None
         
+        # 性能优化：添加帧率控制
+        self.fps_timer = QTimer(self)
+        self.fps_timer.setInterval(33)  # 约30fps
+        self.fps_timer.timeout.connect(self.on_fps_timer)
+        self.is_interacting = False
+        self.needs_high_res_render = True
+        
+        # 性能优化：点显示缓存
+        self.point_glyph_source = None
+        self.cached_mesh = None
+        self.last_selection_state = None
+        
+        # 性能优化：自适应LOD（细节层次）控制
+        self.large_model_threshold = 50000  # 面片数量阈值
+        self.point_threshold = 1000  # 点数量阈值
+        self.is_large_model = False  # 是否是大模型
+        
+        # 性能模式切换
+        self.high_performance_mode = True  # 默认使用高性能模式
+        
         # 创建 VTK 小部件
         self.vtk_widget = QVTKRenderWindowInteractor()
         
@@ -91,7 +110,9 @@ class MeshViewerQt(QMainWindow):
     
     def initUI(self):
         """初始化UI"""
-        self.setWindowTitle('Mesh Viewer')
+        # 设置窗口标题，包含性能模式信息
+        mode_name = "高性能模式" if self.high_performance_mode else "高质量模式"
+        self.setWindowTitle(f'Mesh Viewer - {mode_name}')
         self.setGeometry(100, 100, 1200, 800)
         
         # 创建主窗口部件
@@ -104,11 +125,19 @@ class MeshViewerQt(QMainWindow):
         # 创建内容区域布局（控制面板和VTK窗口）
         content_layout = QHBoxLayout()
         
-        # 创建左侧控制面板
+        # 创建左侧控制面板（使用标签页）
         control_panel = QFrame()
         control_panel.setFrameStyle(QFrame.Panel | QFrame.Raised)
         control_panel.setMaximumWidth(300)
         control_layout = QVBoxLayout(control_panel)
+        
+        # 创建标签页控件
+        self.tab_widget = QTabWidget()
+        control_layout.addWidget(self.tab_widget)
+        
+        # 创建"修复"标签页
+        fix_tab = QWidget()
+        fix_layout = QVBoxLayout(fix_tab)
         
         # 创建点坐标输入区域
         coord_group = QFrame()
@@ -134,7 +163,7 @@ class MeshViewerQt(QMainWindow):
         create_point_btn.clicked.connect(self.create_point)
         coord_layout.addWidget(create_point_btn, 3, 0, 1, 2)
         
-        control_layout.addWidget(coord_group)
+        fix_layout.addWidget(coord_group)
         
         # 创建面操作区域
         face_group = QFrame()
@@ -145,20 +174,17 @@ class MeshViewerQt(QMainWindow):
         create_face_btn.clicked.connect(self.create_face)
         face_layout.addWidget(create_face_btn)
         
-<<<<<<< HEAD
-        # 删除选中面按钮
-        delete_face_btn = QPushButton('删除选中面')
-        delete_face_btn.clicked.connect(self.delete_selected_faces)
-        face_layout.addWidget(delete_face_btn)
-        
-=======
->>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
         # 清除选择按钮
         clear_selection_btn = QPushButton('清除选择')
         clear_selection_btn.clicked.connect(self.clear_selection)
         face_layout.addWidget(clear_selection_btn)
         
-        control_layout.addWidget(face_group)
+        # 添加删除选中面片按钮
+        delete_faces_btn = QPushButton('删除选中面片')
+        delete_faces_btn.clicked.connect(self.delete_selected_faces)
+        face_layout.addWidget(delete_faces_btn)
+        
+        fix_layout.addWidget(face_group)
         
         # 添加选择模式切换按钮
         mode_group = QFrame()
@@ -181,7 +207,7 @@ class MeshViewerQt(QMainWindow):
         mode_layout.addWidget(self.face_mode_btn)
         mode_layout.addWidget(self.smart_mode_btn)
         
-        control_layout.addWidget(mode_group)
+        fix_layout.addWidget(mode_group)
         
         # 连接模式切换信号
         self.point_mode_btn.clicked.connect(lambda: self.set_selection_mode('point'))
@@ -190,7 +216,31 @@ class MeshViewerQt(QMainWindow):
         self.smart_mode_btn.clicked.connect(lambda: self.set_selection_mode('smart'))
         
         # 添加伸缩器
-        control_layout.addStretch()
+        fix_layout.addStretch()
+        
+        # 创建Global标签页（暂时为空）
+        global_tab = QWidget()
+        global_layout = QVBoxLayout(global_tab)
+        global_layout.addWidget(QLabel("Global功能将在此处实现"))
+        global_layout.addStretch()
+        
+        # 创建Query标签页（暂时为空）
+        query_tab = QWidget()
+        query_layout = QVBoxLayout(query_tab)
+        query_layout.addWidget(QLabel("Query功能将在此处实现"))
+        query_layout.addStretch()
+        
+        # 创建Organize标签页（暂时为空）
+        organize_tab = QWidget()
+        organize_layout = QVBoxLayout(organize_tab)
+        organize_layout.addWidget(QLabel("Organize功能将在此处实现"))
+        organize_layout.addStretch()
+        
+        # 将标签页添加到标签页控件
+        self.tab_widget.addTab(fix_tab, "修复")
+        self.tab_widget.addTab(global_tab, "Global")
+        self.tab_widget.addTab(query_tab, "Query")
+        self.tab_widget.addTab(organize_tab, "Organize")
         
         # 设置控制面板布局
         control_panel.setLayout(control_layout)
@@ -200,7 +250,6 @@ class MeshViewerQt(QMainWindow):
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(0, 0, 0, 0)
         
-<<<<<<< HEAD
         # 创建水平布局来放置VTK窗口和自由边按钮
         vtk_container = QHBoxLayout()
         
@@ -424,6 +473,7 @@ class MeshViewerQt(QMainWindow):
             free_edge_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 15))
             overlap_edge_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 + 20))  # 重叠边按钮在自由边按钮下方
             overlap_point_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 + 55))  # 重叠点按钮位置下移
+            perf_mode_btn.move(20, 20)  # 保持在左上角
         
         vtk_frame.resizeEvent = update_button_positions
         
@@ -431,10 +481,6 @@ class MeshViewerQt(QMainWindow):
         right_layout.addLayout(vtk_container, stretch=1)
         
         # 注意：自由边按钮已经添加到vtk_frame中，不需要再添加到btn_container
-=======
-        # 添加VTK窗口
-        right_layout.addWidget(self.vtk_widget, stretch=1)
->>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
         
         # 创建状态指示器面板
         status_panel = QFrame()
@@ -505,42 +551,44 @@ class MeshViewerQt(QMainWindow):
         main_layout.addLayout(content_layout)
         
         # VTK相关初始化
-        self.renderer = vtk.vtkRenderer()
-        self.renderer.SetBackground(1.0, 1.0, 1.0)
-<<<<<<< HEAD
+        # self.renderer = vtk.vtkRenderer()  # 删除这一行，因为在前面已经创建了renderer
+        # self.renderer.SetBackground(1.0, 1.0, 1.0)  # 删除这一行，因为在前面已经设置了背景
         
-        # 获取渲染窗口并启用性能优化
+        # 性能优化：启用双缓冲减少闪烁，设置渲染窗口属性
         render_window = self.vtk_widget.GetRenderWindow()
-        render_window.SetMultiSamples(0)  # 禁用多重采样以提高性能
-        render_window.SetPointSmoothing(False)
-        render_window.SetLineSmoothing(False)
-        render_window.SetPolygonSmoothing(False)
-        render_window.SetDoubleBuffer(True)  # 启用双缓冲
+        render_window.SetDoubleBuffer(1)
+        render_window.SetDesiredUpdateRate(30.0)  # 目标帧率设置为30fps
         
-        # 启用硬件加速
+        # 判断模型大小，动态调整渲染参数
+        if len(self.mesh_data['faces']) > self.large_model_threshold:
+            render_window.SetMultiSamples(0)  # 关闭抗锯齿提高性能
+            self.is_large_model = True
+            # 性能优化: 大型模型时启用多种渲染优化
+            self.renderer = vtk.vtkRenderer()
+            self.renderer.SetUseDepthPeeling(0)  # 禁用深度剥离提高性能
+            self.renderer.SetUseFXAA(0)  # 禁用FXAA抗锯齿
+            # 某些版本的VTK可能不支持SetUseSSAO
+            try:
+                self.renderer.SetUseSSAO(0)  # 禁用环境光遮蔽
+            except AttributeError:
+                pass  # 忽略不支持的方法
+            self.renderer.SetBackground(1.0, 1.0, 1.0)
+            print(f"大型模型检测: {len(self.mesh_data['faces'])}面, 关闭抗锯齿并应用性能优化")
+        else:
+            render_window.SetMultiSamples(4)  # 适度的抗锯齿
+            # 正常模型使用标准设置
+            self.renderer = vtk.vtkRenderer()
+            self.renderer.SetBackground(1.0, 1.0, 1.0)
+            print(f"普通模型检测: {len(self.mesh_data['faces'])}面, 应用标准渲染设置")
+        
         render_window.AddRenderer(self.renderer)
+        
         self.iren = render_window.GetInteractor()
-        
-        # 设置交互器样式并优化相机操作
-        style = vtk.vtkInteractorStyleTrackballCamera()
-        style.SetMotionFactor(10.0)  # 增加相机移动速度
-        style.SetAutoAdjustCameraClippingRange(True)  # 自动调整相机裁剪范围
-        self.iren.SetInteractorStyle(style)
-        
-        # 设置渲染器的优化选项
-        self.renderer.SetUseDepthPeeling(False)  # 禁用深度剥离
-        self.renderer.SetUseFXAA(False)  # 禁用FXAA抗锯齿
-        self.renderer.SetTwoSidedLighting(False)  # 禁用双面光照
-        
-=======
-        self.vtk_widget.GetRenderWindow().AddRenderer(self.renderer)
-        self.iren = self.vtk_widget.GetRenderWindow().GetInteractor()
         
         # 设置交互器样式
         style = vtk.vtkInteractorStyleTrackballCamera()
         self.iren.SetInteractorStyle(style)
         
->>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
         # 重新设置事件观察器
         self.iren.RemoveObservers("LeftButtonPressEvent")
         self.iren.RemoveObservers("MouseMoveEvent")
@@ -550,17 +598,16 @@ class MeshViewerQt(QMainWindow):
         self.iren.AddObserver("MouseMoveEvent", self.on_mouse_move)
         self.iren.AddObserver("LeftButtonReleaseEvent", self.on_left_button_release)
         
-<<<<<<< HEAD
-        # 设置交互器的性能优化选项
-        self.iren.SetDesiredUpdateRate(30.0)  # 设置期望的更新率
-        self.iren.SetStillUpdateRate(0.001)  # 静止时的更新率
-        
-=======
->>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
         # 初始化显示
         self.update_display()
         self.reset_camera()
         self.iren.Initialize()
+        
+        # 启动帧率控制定时器
+        self.fps_timer.start()
+        
+        # 添加方向指示器（坐标轴）
+        self.add_orientation_marker()
         
         # 初始化选择模式
         self.selection_mode = 'point'
@@ -568,6 +615,114 @@ class MeshViewerQt(QMainWindow):
         self.selected_edges = []
         self.selected_faces = []
         self.temp_points = []  # 仅用于创建面的临时点
+        
+        # 添加快捷键
+        self.setFocusPolicy(Qt.StrongFocus)
+        
+        # 创建性能模式切换按钮
+        perf_mode_btn = QPushButton('切换性能模式')
+        perf_mode_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #e0e0e0;
+                color: #333333;
+                border: 1px solid #999999;
+                border-radius: 4px;
+                padding: 2px;
+            }
+            QPushButton:hover {
+                background-color: #d0d0d0;
+                border-color: #666666;
+            }
+        """)
+        perf_mode_btn.clicked.connect(self.toggle_performance_mode)
+        perf_mode_btn.setFixedSize(120, 30)
+        perf_mode_btn.setParent(vtk_frame)
+        perf_mode_btn.move(20, 20)  # 位于左上角
+    
+    def add_orientation_marker(self):
+        """添加随视角变化的坐标轴方向指示器"""
+        # 创建坐标轴
+        axes = vtk.vtkAxesActor()
+        
+        # 设置坐标轴标签
+        axes.SetXAxisLabelText("X")
+        axes.SetYAxisLabelText("Y")
+        axes.SetZAxisLabelText("Z")
+        
+        # 设置坐标轴的粗细
+        axes.SetShaftTypeToCylinder()
+        axes.SetCylinderRadius(0.02)
+        axes.SetConeRadius(0.15)
+        
+        # 设置坐标轴长度
+        axes.SetTotalLength(1.0, 1.0, 1.0)
+        
+        # 设置轴颜色
+        axes.GetXAxisTipProperty().SetColor(1, 0, 0)  # X轴: 红色
+        axes.GetYAxisTipProperty().SetColor(0, 1, 0)  # Y轴: 绿色
+        axes.GetZAxisTipProperty().SetColor(0, 0, 1)  # Z轴: 蓝色
+        
+        axes.GetXAxisShaftProperty().SetColor(1, 0, 0)
+        axes.GetYAxisShaftProperty().SetColor(0, 1, 0)
+        axes.GetZAxisShaftProperty().SetColor(0, 0, 1)
+        
+        # 设置标签属性
+        for label_idx, label in enumerate([axes.GetXAxisCaptionActor2D(), 
+                                         axes.GetYAxisCaptionActor2D(), 
+                                         axes.GetZAxisCaptionActor2D()]):
+            # 设置标签的字体大小和样式
+            label_prop = label.GetCaptionTextProperty()
+            label_prop.SetFontSize(12)
+            label_prop.SetBold(True)
+            
+            # 设置标签颜色
+            if label_idx == 0:    # X轴
+                label_prop.SetColor(1, 0, 0)
+            elif label_idx == 1:  # Y轴
+                label_prop.SetColor(0, 1, 0)
+            else:                 # Z轴
+                label_prop.SetColor(0, 0, 1)
+        
+        # 创建方向指示器部件
+        self.orientation_marker = vtk.vtkOrientationMarkerWidget()
+        self.orientation_marker.SetOrientationMarker(axes)
+        self.orientation_marker.SetInteractor(self.iren)
+        
+        # 设置方向指示器的位置和大小 (右下角)
+        self.orientation_marker.SetViewport(0.80, 0.02, 0.98, 0.2)
+        
+        # 设置边框属性
+        self.orientation_marker.SetOutlineColor(0.93, 0.57, 0.13)  # 橙色边框
+        self.orientation_marker.SetEnabled(1)
+        
+        # 启用方向指示器但禁用拖动交互
+        self.orientation_marker.InteractiveOff()
+        
+        # 配置属性
+        # 创建一个立方体作为背景 - 可选，提供更好的视觉效果
+        cube = vtk.vtkCubeSource()
+        cube.SetXLength(1.5)
+        cube.SetYLength(1.5)
+        cube.SetZLength(1.5)
+        cube.Update()
+        
+        cube_mapper = vtk.vtkPolyDataMapper()
+        cube_mapper.SetInputData(cube.GetOutput())
+        
+        cube_actor = vtk.vtkActor()
+        cube_actor.SetMapper(cube_mapper)
+        
+        # 设置背景颜色为半透明浅灰色
+        cube_actor.GetProperty().SetColor(0.9, 0.9, 0.9)
+        cube_actor.GetProperty().SetOpacity(0.3)
+        
+        # 将立方体和坐标轴添加到方向指示器
+        assembly = vtk.vtkPropAssembly()
+        assembly.AddPart(cube_actor)
+        assembly.AddPart(axes)
+        
+        # 最后更新方向指示器
+        self.orientation_marker.SetOrientationMarker(assembly)
     
     def set_selection_mode(self, mode):
         """设置选择模式"""
@@ -579,11 +734,34 @@ class MeshViewerQt(QMainWindow):
         self.face_mode_btn.setChecked(mode == 'face')
         self.smart_mode_btn.setChecked(mode == 'smart')
     
+    def on_fps_timer(self):
+        """帧率控制定时器回调"""
+        # 只有在需要时才进行高分辨率渲染
+        if self.needs_high_res_render and not self.is_interacting:
+            render_window = self.vtk_widget.GetRenderWindow()
+            # 为大模型使用更低的渲染质量
+            if self.is_large_model:
+                render_window.SetDesiredUpdateRate(0.001)  # 大模型使用更低的质量
+            else:
+                render_window.SetDesiredUpdateRate(0.0001)  # 小模型使用高质量
+            render_window.Render()
+            self.needs_high_res_render = False
+            
+            # 调试信息
+            #print("高质量渲染完成")
+            
+            # 触发垃圾回收
+            gc.collect()
+    
     def on_left_button_press(self, obj, event):
         """处理鼠标左键按下事件"""
         self.left_button_down = True
         self.moved_since_press = False
         self.press_pos = self.iren.GetEventPosition()
+        
+        # 性能优化：交互时降低渲染质量
+        self.is_interacting = True
+        self.vtk_widget.GetRenderWindow().SetDesiredUpdateRate(30.0)
         
         # 允许 VTK 继续处理事件
         self.iren.GetInteractorStyle().OnLeftButtonDown()
@@ -598,6 +776,11 @@ class MeshViewerQt(QMainWindow):
                 if dx > 3 or dy > 3:
                     self.moved_since_press = True
         
+        # 性能优化：交互时保持较低的渲染质量
+        if self.left_button_down:
+            self.is_interacting = True
+            self.vtk_widget.GetRenderWindow().SetDesiredUpdateRate(30.0)
+        
         # 允许 VTK 继续处理事件
         self.iren.GetInteractorStyle().OnMouseMove()
     
@@ -610,6 +793,10 @@ class MeshViewerQt(QMainWindow):
         self.left_button_down = False
         self.moved_since_press = False
         self.press_pos = None
+        
+        # 性能优化：交互结束后，标记为需要高质量渲染
+        self.is_interacting = False
+        self.needs_high_res_render = True
         
         # 允许 VTK 继续处理事件
         self.iren.GetInteractorStyle().OnLeftButtonUp()
@@ -736,7 +923,14 @@ class MeshViewerQt(QMainWindow):
             QMessageBox.warning(self, "输入错误", "请输入有效的数值坐标")
     
     def create_vtk_mesh(self):
-        """从网格数据创建VTK网格"""
+        """从网格数据创建VTK网格，带优化的性能"""
+        # 检查是否可以重用缓存的网格
+        if self.cached_mesh is not None:
+            # 如果顶点和面的数量没有变化，可以重用缓存
+            if (len(self.mesh_data['vertices']) == self.cached_mesh.GetNumberOfPoints() and 
+                len(self.mesh_data['faces']) == self.cached_mesh.GetNumberOfCells()):
+                return self.cached_mesh
+        
         points = vtk.vtkPoints()
         for vertex in self.mesh_data['vertices']:
             points.InsertNextPoint(vertex)
@@ -751,12 +945,58 @@ class MeshViewerQt(QMainWindow):
         mesh = vtk.vtkPolyData()
         mesh.SetPoints(points)
         mesh.SetPolys(cells)
-        mesh.Modified()
         
-        # 保存网格引用
+        # 性能优化：仅在首次创建网格时计算法线
+        if self.cached_mesh is None:
+            normals = vtk.vtkPolyDataNormals()
+            normals.SetInputData(mesh)
+            normals.ComputePointNormalsOn()
+            normals.ComputeCellNormalsOn()
+            
+            # 性能优化：大型模型减少法线计算精度
+            if self.is_large_model:
+                normals.SetSplitting(0)  # 禁用分裂以提高性能
+                normals.SetFeatureAngle(60)  # 增加特征角度，减少法线计算
+                normals.SetConsistency(1)  # 保持法线一致性
+            
+            normals.Update()
+            mesh = normals.GetOutput()
+        
+        # 缓存网格以便重用
+        self.cached_mesh = mesh
         self.mesh = mesh
         
         return mesh
+    
+    def create_point_glyph_source(self):
+        """创建点的显示源，仅需创建一次"""
+        if self.point_glyph_source is None:
+            # 为大型模型使用更简单的点表示
+            if self.is_large_model:
+                # 使用简单的立方体代替球体，渲染更快
+                cube = vtk.vtkCubeSource()
+                cube.SetXLength(0.8)
+                cube.SetYLength(0.8)
+                cube.SetZLength(0.8)
+                cube.Update()
+                self.point_glyph_source = cube.GetOutput()
+            else:
+                # 小型模型仍使用球体表示点
+                sphere = vtk.vtkSphereSource()
+                sphere.SetRadius(0.5)
+                
+                # 根据模型大小自适应调整点的细节级别
+                if self.is_large_model:
+                    sphere.SetPhiResolution(6)    # 大模型使用更低的细节
+                    sphere.SetThetaResolution(6)
+                else:
+                    sphere.SetPhiResolution(8)    # 小模型使用标准细节
+                    sphere.SetThetaResolution(8)
+                    
+                sphere.Update()
+                self.point_glyph_source = sphere.GetOutput()
+                
+        return self.point_glyph_source
     
     def update_status_counts(self):
         """更新状态计数"""
@@ -765,7 +1005,27 @@ class MeshViewerQt(QMainWindow):
         self.face_count.setText(str(len(self.selected_faces)))
 
     def update_display(self):
-        """更新显示"""
+        """更新显示，使用优化的点显示方法"""
+        # 检查选择状态是否变化
+        current_selection = {
+            'points': set(self.selected_points),
+            'edges': set(tuple(edge) for edge in self.selected_edges),
+            'faces': set(self.selected_faces)
+        }
+        
+        # 如果选择状态没有变化且我们不是在交互中，可以跳过重新渲染
+        if (self.last_selection_state == current_selection and 
+            not self.is_interacting and 
+            not self.needs_high_res_render and
+            hasattr(self, '_first_render')):
+            #print("跳过不必要的渲染")
+            return
+        
+        # 记录渲染时间
+        start_time = time.time()
+        
+        self.last_selection_state = current_selection
+        
         self.renderer.RemoveAllViewProps()
         
         # 保存当前相机状态
@@ -778,13 +1038,42 @@ class MeshViewerQt(QMainWindow):
         mesh = self.create_vtk_mesh()
         mapper = vtk.vtkPolyDataMapper()
         mapper.SetInputData(mesh)
+        
+        # 性能优化：根据模型大小设置渲染参数
+        # mapper.SetImmediateModeRendering(0)  # 移除不兼容的方法调用
+        
+        # 大模型额外优化
+        if self.is_large_model:
+            # 减少细节级别优化
+            mapper.SetResolveCoincidentTopologyToPolygonOffset()
+            mapper.SetScalarVisibility(0)
+            # 关闭不必要的控制以获得更好的性能
+            mapper.ScalarVisibilityOff()
+            mapper.SetColorModeToDefault()
+            
+            # 指定渲染策略
+            if hasattr(mapper, 'SetScalarMaterialMode'):
+                mapper.SetScalarMaterialMode(0)
+        
         mapper.Update()
         
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
         actor.GetProperty().SetColor(0.8, 0.8, 0.8)  # 浅灰色
+        
+        # 大模型减少边的显示
+        if not self.is_large_model or len(self.selected_faces) > 0:
         actor.GetProperty().SetEdgeVisibility(True)
         actor.GetProperty().SetLineWidth(1.0)
+        else:
+            actor.GetProperty().SetEdgeVisibility(False)  # 大模型默认不显示边
+        
+        # 优化渲染属性
+        if self.is_large_model:
+            actor.GetProperty().SetSpecular(0)  # 关闭高光效果
+            actor.GetProperty().SetSpecularPower(1)
+            actor.GetProperty().SetDiffuse(0.8)
+            actor.GetProperty().SetAmbient(0.2)
         
         self.renderer.AddActor(actor)
         
@@ -801,6 +1090,7 @@ class MeshViewerQt(QMainWindow):
             
             selected_mapper = vtk.vtkPolyDataMapper()
             selected_mapper.SetInputData(selected_mesh)
+            # selected_mapper.SetImmediateModeRendering(0)  # 移除不兼容的方法调用
             selected_mapper.SetResolveCoincidentTopologyToPolygonOffset()
             selected_mapper.SetResolveCoincidentTopologyPolygonOffsetParameters(1.0, 1.0)
             
@@ -833,42 +1123,100 @@ class MeshViewerQt(QMainWindow):
             
             edge_mapper = vtk.vtkPolyDataMapper()
             edge_mapper.SetInputData(edge_data)
+            # edge_mapper.SetImmediateModeRendering(0)  # 移除不兼容的方法调用
             
             edge_actor = vtk.vtkActor()
             edge_actor.SetMapper(edge_mapper)
             edge_actor.GetProperty().SetColor(0.0, 1.0, 0.0)  # 绿色
             edge_actor.GetProperty().SetLineWidth(3.0)
+            
+            # 大模型时不使用线条管道渲染以提高性能
+            if not self.is_large_model:
             edge_actor.GetProperty().SetRenderLinesAsTubes(True)
             
             self.renderer.AddActor(edge_actor)
         
-        # 显示所有点
-        for i, point in enumerate(self.mesh_data['vertices']):
-            sphere = vtk.vtkSphereSource()
-            sphere.SetCenter(point)
-            sphere.SetRadius(0.5)
-            sphere.SetPhiResolution(16)
-            sphere.SetThetaResolution(16)
-            
-            sphereMapper = vtk.vtkPolyDataMapper()
-            sphereMapper.SetInputConnection(sphere.GetOutputPort())
-            
-            sphereActor = vtk.vtkActor()
-            sphereActor.SetMapper(sphereMapper)
-            
-            if i in self.selected_points:
-                sphereActor.GetProperty().SetColor(1.0, 0.0, 0.0)  # 红色
-                sphereActor.GetProperty().SetOpacity(1.0)
+        # 显示点 - 性能优化：智能显示点，减少渲染负担
+        total_points = len(self.mesh_data['vertices'])
+        
+        # 根据模型大小动态调整点阈值
+        point_threshold = self.point_threshold
+        if self.is_large_model:
+            point_threshold = 200  # 大模型使用更小的阈值
+        
+        # 确定要显示哪些点
+        points_to_display = []
+        
+        # 选择性显示点
+        if (total_points <= point_threshold or self.selected_points) and not self.is_interacting:
+            # 交互过程中不显示太多点，除非特别选中了点
+            if self.is_interacting and not self.selected_points:
+                # 交互时减少显示的点
+                pass
+            elif total_points <= point_threshold:
+                # 如果点数少于阈值，显示所有点
+                for i, point in enumerate(self.mesh_data['vertices']):
+                    is_selected = i in self.selected_points
+                    points_to_display.append((i, is_selected))
             else:
-                sphereActor.GetProperty().SetColor(0.3, 0.3, 0.3)  # 深灰色
-                sphereActor.GetProperty().SetOpacity(0.8)
+                # 否则只显示选中的点
+                for i in self.selected_points:
+                    points_to_display.append((i, True))
             
-            # 确保点始终显示在最前面
-            sphereActor.GetProperty().SetAmbient(1.0)
-            sphereActor.GetProperty().SetDiffuse(0.0)
-            sphereActor.GetProperty().SetSpecular(0.0)
-            
-            self.renderer.AddActor(sphereActor)
+            if points_to_display:
+                # 创建点的VTK表示
+                pts = vtk.vtkPoints()
+                vertex_data = vtk.vtkPolyData()
+                colors = vtk.vtkUnsignedCharArray()
+                colors.SetNumberOfComponents(3)
+                colors.SetName("Colors")
+                
+                for idx, (i, is_selected) in enumerate(points_to_display):
+                    pts.InsertNextPoint(self.mesh_data['vertices'][i])
+                    if is_selected:
+                        colors.InsertNextTuple3(255, 0, 0)  # 红色
+                    else:
+                        colors.InsertNextTuple3(77, 77, 77)  # 深灰色
+                
+                vertex_data.SetPoints(pts)
+                
+                # 创建或获取点的Glyph源
+                point_source = self.create_point_glyph_source()
+                
+                # 使用Glyph3D为每个点创建一个球体
+                glyph = vtk.vtkGlyph3D()
+                glyph.SetSourceData(point_source)
+                glyph.SetInputData(vertex_data)
+                glyph.ScalingOff()
+                
+                # 大型模型额外优化
+                if self.is_large_model:
+                    if hasattr(glyph, 'SetColorModeToColorByScalar'):
+                        glyph.SetColorModeToColorByScalar()
+                
+                glyph.Update()
+                
+                # 为每个点着色
+                glyph_data = glyph.GetOutput()
+                glyph_data.GetPointData().SetScalars(colors)
+                
+                # 创建mapper和actor
+                glyph_mapper = vtk.vtkPolyDataMapper()
+                glyph_mapper.SetInputData(glyph_data)
+                # glyph_mapper.SetImmediateModeRendering(0)  # 移除不兼容的方法调用
+                
+                glyph_actor = vtk.vtkActor()
+                glyph_actor.SetMapper(glyph_mapper)
+                glyph_actor.GetProperty().SetAmbient(1.0)
+                glyph_actor.GetProperty().SetDiffuse(0.0)
+                glyph_actor.GetProperty().SetSpecular(0.0)
+                
+                # 大型模型优化点的渲染属性
+                if self.is_large_model:
+                    glyph_actor.GetProperty().SetRepresentationToPoints()
+                    glyph_actor.GetProperty().SetPointSize(3)
+                
+                self.renderer.AddActor(glyph_actor)
         
         # 更新状态计数
         self.update_status_counts()
@@ -882,9 +1230,29 @@ class MeshViewerQt(QMainWindow):
             self.renderer.ResetCamera()
             self._first_render = True
         
+        # 标记为需要高质量渲染
+        self.needs_high_res_render = True
+        
         # 设置渲染器属性
-        self.renderer.GetRenderWindow().SetMultiSamples(8)  # 启用抗锯齿
+        if self.is_interacting:
+            update_rate = 30.0  # 交互期间使用高帧率
+            if self.is_large_model:
+                update_rate = 15.0  # 大模型使用更低的帧率
+            self.vtk_widget.GetRenderWindow().SetDesiredUpdateRate(update_rate)
+        else:
+            update_rate = 0.0001  # 静态渲染使用高质量
+            if self.is_large_model:
+                update_rate = 0.001  # 大模型使用稍低的质量
+            self.vtk_widget.GetRenderWindow().SetDesiredUpdateRate(update_rate)
+        
+        # 更新坐标轴方向指示器 - vtkOrientationMarkerWidget没有UpdateMarkerOrientation方法
+        # 方向标记器会自动跟随相机方向
+        
         self.vtk_widget.GetRenderWindow().Render()
+        
+        # 输出渲染性能调试信息
+        end_time = time.time()
+        #print(f"渲染耗时: {(end_time - start_time)*1000:.1f}ms")
     
     def delete_selected_faces(self):
         """删除选中的面"""
@@ -892,29 +1260,26 @@ class MeshViewerQt(QMainWindow):
             print("没有选中的面可删除")
             return
         
-<<<<<<< HEAD
-        # 创建面片的mask
-        face_mask = np.ones(len(self.mesh_data['faces']), dtype=bool)
-        face_mask[self.selected_faces] = False
-        
-        # 更新面片数组
-        self.mesh_data['faces'] = self.mesh_data['faces'][face_mask]
-        
-        # 如果存在法向量，重新计算顶点法向量
-        if 'normals' in self.mesh_data:
-            # 对于球体，法向量就是归一化的顶点坐标
-            self.mesh_data['normals'] = self.mesh_data['vertices'] / np.linalg.norm(self.mesh_data['vertices'], axis=1)[:, np.newaxis]
-=======
         mask = np.ones(len(self.mesh_data['faces']), dtype=bool)
         mask[self.selected_faces] = False
         
+        # 更新面片数组
         self.mesh_data['faces'] = self.mesh_data['faces'][mask]
-        if 'normals' in self.mesh_data:
-            self.mesh_data['normals'] = self.mesh_data['normals'][mask]
->>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
         
+        # 安全地更新法向量数组（如果存在且维度匹配）
+        if 'normals' in self.mesh_data:
+            normals = self.mesh_data['normals']
+            if len(normals) == len(mask):
+                self.mesh_data['normals'] = normals[mask]
+            else:
+                # 如果维度不匹配，删除法向量数组，它会在下次渲染时重新计算
+                del self.mesh_data['normals']
+        
+        # 清除选择并强制更新缓存的网格
         self.selected_faces = []
-        print("已删除选中的面")
+        self.cached_mesh = None  # 强制在下次更新时重新创建网格
+        
+        print(f"已删除选中的面片")
         self.update_display()
     
     def create_face(self):
@@ -977,7 +1342,15 @@ class MeshViewerQt(QMainWindow):
         camera.SetViewUp(0, 1, 0)
         
         self.renderer.ResetCameraClippingRange()
+        
+        # 性能优化：避免不必要的全分辨率渲染
+        self.vtk_widget.GetRenderWindow().GetInteractor().SetDesiredUpdateRate(30.0)
         self.vtk_widget.GetRenderWindow().Render()
+        
+        # 确保坐标轴方向指示器也被更新
+        if hasattr(self, 'orientation_marker') and self.orientation_marker is not None:
+            self.orientation_marker.UpdateMarkerOrientation()
+            self.orientation_marker.Render()
     
     def clear_all_selections(self):
         """清除所有选择"""
@@ -985,7 +1358,6 @@ class MeshViewerQt(QMainWindow):
         self.selected_edges = []
         self.selected_faces = []
         self.update_display()
-<<<<<<< HEAD
         print("已清除所有选择") 
 
     def select_free_edges(self):
@@ -1281,16 +1653,43 @@ class MeshViewerQt(QMainWindow):
 
 
     def analyze_face_quality(self):
-        """分析面片质量"""
+        """分析面片质量，使用STAR-CCM+的面质量公式"""
         import numpy as np
         from vtk.util.numpy_support import numpy_to_vtk
+        from PyQt5.QtWidgets import QInputDialog, QMessageBox
+
+        # 弹出对话框要求用户输入质量阈值
+        threshold, ok = QInputDialog.getDouble(
+            self, '面片质量阈值', 
+            '请输入面片质量阈值 (0-1):', 
+            value=0.5, 
+            min=0.01, 
+            max=0.99, 
+            decimals=2
+        )
+        
+        if not ok:
+            return
+
+        # 清除当前选择
+        self.clear_selection()
 
         # 创建面片质量数组
         face_quality = np.zeros(len(self.mesh_data['faces']))
         vertices = self.mesh_data['vertices']
 
+        # 创建进度对话框
+        progress = QProgressDialog("分析面片质量...", "取消", 0, len(self.mesh_data['faces']), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.show()
+
+        try:
         # 遍历所有面片计算质量指标
         for i, face in enumerate(self.mesh_data['faces']):
+                if progress.wasCanceled():
+                    return
+                
             # 获取面片的三个顶点
             v1 = vertices[face[0]]
             v2 = vertices[face[1]]
@@ -1301,99 +1700,231 @@ class MeshViewerQt(QMainWindow):
             e2 = np.linalg.norm(v3 - v2)
             e3 = np.linalg.norm(v1 - v3)
 
-            # 计算面积
-            s = (e1 + e2 + e3) / 2  # 半周长
-            area = np.sqrt(s * (s - e1) * (s - e2) * (s - e3))  # 海伦公式
-
-            # 计算纵横比（最长边与最短边的比值）
-            aspect_ratio = max(e1, e2, e3) / min(e1, e2, e3)
-
-            # 计算扭曲度（最小角度与60度的偏差）
+                # 计算边向量
             v12 = v2 - v1
             v23 = v3 - v2
             v31 = v1 - v3
-            angle1 = np.arccos(np.dot(-v31, v12) / (np.linalg.norm(v31) * np.linalg.norm(v12)))
-            angle2 = np.arccos(np.dot(-v12, v23) / (np.linalg.norm(v12) * np.linalg.norm(v23)))
-            angle3 = np.arccos(np.dot(-v23, v31) / (np.linalg.norm(v23) * np.linalg.norm(v31)))
-            min_angle = min(angle1, angle2, angle3)
-            skewness = abs(min_angle - np.pi/3) / (np.pi/3)
 
-            # 综合质量评分（0-1之间，1为最好）
-            quality = 1.0 / (1.0 + aspect_ratio + skewness)
+                # 计算面积
+                # 使用叉积计算面积，更加稳定
+                cross_product = np.cross(v12, -v31)
+                area = 0.5 * np.linalg.norm(cross_product)
+
+                # 对于接近零的面积，设置一个非常小的值以避免除零错误
+                if area < 1e-10:
+                    quality = 0.0
             face_quality[i] = quality
+                    progress.setValue(i + 1)
+                    continue
+
+                # 计算三角形周长
+                perimeter = e1 + e2 + e3
+                if perimeter < 1e-10:  # 防止除零错误
+                    quality = 0.0
+                    face_quality[i] = quality
+                    progress.setValue(i + 1)
+                    continue
+
+                # 计算等边质量 (STAR-CCM+ Equiangle skewness)
+                # 计算各个角度
+                try:
+                    # 归一化向量
+                    u12 = v12 / e1 if e1 > 1e-10 else np.zeros(3)
+                    u23 = v23 / e2 if e2 > 1e-10 else np.zeros(3)
+                    u31 = v31 / e3 if e3 > 1e-10 else np.zeros(3)
+                    
+                    # 计算三个内角 (安全计算点积，避免数值误差)
+                    cos_angle1 = max(-1.0, min(1.0, np.dot(-u31, u12)))
+                    cos_angle2 = max(-1.0, min(1.0, np.dot(-u12, u23)))
+                    cos_angle3 = max(-1.0, min(1.0, np.dot(-u23, u31)))
+                    
+                    angle1 = np.arccos(cos_angle1)
+                    angle2 = np.arccos(cos_angle2)
+                    angle3 = np.arccos(cos_angle3)
+                    
+                    # 验证角度和是否接近π
+                    angle_sum = angle1 + angle2 + angle3
+                    if abs(angle_sum - np.pi) > 1e-3:
+                        # 角度计算有问题，可能是退化三角形
+                        equiangle_quality = 0.0
+                    else:
+                        # 计算角度偏差 (理想角度为60度)
+                        ideal_angle = np.pi / 3  # 60度
+                        max_deviation = max(abs(angle1 - ideal_angle), 
+                                           abs(angle2 - ideal_angle), 
+                                           abs(angle3 - ideal_angle))
+                        equiangle_quality = 1.0 - (max_deviation / (np.pi - ideal_angle))
+                        equiangle_quality = max(0.0, min(1.0, equiangle_quality))
+                except:
+                    equiangle_quality = 0.0
+
+                # 计算纵横比质量 (STAR-CCM+ Aspect Ratio Quality)
+                # 使用面积与周长的关系，完美的等边三角形有最佳的面积周长比
+                ideal_ratio = 4 * np.sqrt(3)  # 等边三角形的常数系数
+                area_perimeter_quality = (4 * np.sqrt(3) * area) / (perimeter * perimeter)
+                area_perimeter_quality = max(0.0, min(1.0, area_perimeter_quality))  # 归一化到[0,1]
+
+                # 计算单元雅可比质量 (STAR-CCM+ Cell Jacobian Quality)
+                # 对于三角形，使用最小高度与最大边长的比值
+                min_height = 2 * area / max(e1, e2, e3)
+                jacobian_quality = 0.0
+                if max(e1, e2, e3) > 1e-10:
+                    # 归一化高宽比 (理想值为等边三角形的高宽比)
+                    ideal_height_ratio = np.sqrt(3) / 2
+                    jacobian_quality = (min_height / max(e1, e2, e3)) / ideal_height_ratio
+                    jacobian_quality = max(0.0, min(1.0, jacobian_quality))
+
+                # 综合质量评分 (STAR-CCM+ 综合多个指标)
+                # 权重可以根据具体需求调整
+                quality = 0.4 * equiangle_quality + 0.4 * area_perimeter_quality + 0.2 * jacobian_quality
+                
+                # 最后的保护措施
+                quality = max(0.0, min(1.0, quality))
+                face_quality[i] = quality
+                
+                # 更新进度
+                progress.setValue(i + 1)
+                
+            # 找出质量低于阈值的面片
+            low_quality_faces = [i for i, q in enumerate(face_quality) if q < threshold]
+            
+            # 更新选中的面片
+            self.selected_faces = low_quality_faces
 
         # 创建颜色映射
         colors = vtk.vtkUnsignedCharArray()
         colors.SetNumberOfComponents(3)
         colors.SetName('Colors')
 
-        # 设置颜色范围（红色到绿色）
+            # 设置颜色范围（红色到绿色），采用STAR-CCM+类似的配色方案
         for q in face_quality:
             if q > 0.8:  # 高质量（绿色）
                 colors.InsertNextTuple3(0, 255, 0)
-            elif q > 0.5:  # 中等质量（黄色）
-                colors.InsertNextTuple3(255, 255, 0)
+                elif q > threshold:  # 中等质量（黄色）
+                    # 在黄色和绿色之间进行插值
+                    factor = (q - threshold) / (0.8 - threshold)
+                    r = int(255 * (1 - factor))
+                    g = 255
+                    b = 0
+                    colors.InsertNextTuple3(r, g, b)
             else:  # 低质量（红色）
-                colors.InsertNextTuple3(255, 0, 0)
+                    # 在红色和黄色之间进行插值
+                    if threshold > 0:
+                        factor = q / threshold
+                        r = 255
+                        g = int(255 * factor)
+                        b = 0
+                        colors.InsertNextTuple3(r, g, b)
+                    else:
+                        colors.InsertNextTuple3(255, 0, 0)  # 纯红色
 
         # 更新网格显示
         self.mesh.GetCellData().SetScalars(colors)
-        self.vtk_widget.GetRenderWindow().Render()
+            
+            # 更新界面显示
+            self.update_display()
 
         # 显示统计信息
         high_quality = np.sum(face_quality > 0.8)
-        medium_quality = np.sum((face_quality <= 0.8) & (face_quality > 0.5))
-        low_quality = np.sum(face_quality <= 0.5)
+            medium_quality = np.sum((face_quality <= 0.8) & (face_quality > threshold))
+            low_quality = len(low_quality_faces)
         total_faces = len(face_quality)
 
         quality_info = f'面片质量分析结果:\n'
         quality_info += f'高质量面片（绿色）: {high_quality} ({high_quality/total_faces*100:.1f}%)\n'
         quality_info += f'中等质量面片（黄色）: {medium_quality} ({medium_quality/total_faces*100:.1f}%)\n'
-        quality_info += f'低质量面片（红色）: {low_quality} ({low_quality/total_faces*100:.1f}%)'
+            quality_info += f'低质量面片（红色）: {low_quality} ({low_quality/total_faces*100:.1f}%)\n'
+            quality_info += f'\n已选中 {low_quality} 个质量低于 {threshold} 的面片'
 
         QMessageBox.information(self, '面片质量分析', quality_info)
 
+            # 更新状态栏
+            self.statusBar.showMessage(f'已选中 {low_quality} 个质量低于 {threshold} 的面片')
+            
+        finally:
+            progress.close()
+
     def select_adjacent_faces(self):
-        """选择与当前选中面片相邻的所有面片"""
-        if not self.selected_faces:
-            self.statusBar.showMessage('请先选择一个面片')
+        """
+        分析面片邻近性，使用STAR-CCM+公式和高性能算法来检测和识别问题面片。
+        
+        性能优化策略:
+        1. 使用专用的高性能实现，从独立模块导入
+        2. 利用numpy向量化操作 
+        3. 使用空间哈希网格而非KD-tree加速空间查询
+        4. 使用AABB包围盒快速剔除
+        5. 多线程并行计算面片距离
+        """
+        try:
+            # 导入高性能实现
+            from high_performance_proximity import detect_face_proximity
+            import numpy as np
+            from PyQt5.QtWidgets import QInputDialog, QProgressDialog, QMessageBox
+            
+            # 获取用户输入的邻近阈值
+            threshold, ok = QInputDialog.getDouble(
+                self, "设置面片邻近性阈值", 
+                "请输入邻近性阈值 (0.01-0.5)，较小的值检测更严格:", 
+                0.1, 0.01, 0.5, 2)
+            
+            if not ok:
             return
 
-        # 创建面片邻接关系字典
-        face_adjacency = {}
-        for i, face1 in enumerate(self.mesh_data['faces']):
-            face_adjacency[i] = set()
-            # 获取当前面片的三条边
-            edges1 = [
-                tuple(sorted([face1[j], face1[(j+1)%3]]))
-                for j in range(3)
-            ]
+            # 创建进度对话框
+            progress = QProgressDialog("分析面片邻近性...", "取消", 0, 100, self)
+            progress.setWindowTitle("面片邻近性分析")
+            progress.setMinimumDuration(0)
+            progress.setWindowModality(2)  # 应用程序模态
+            progress.show()
             
-            # 检查其他面片是否与当前面片共享边
-            for j, face2 in enumerate(self.mesh_data['faces']):
-                if i != j:
-                    edges2 = [
-                        tuple(sorted([face2[k], face2[(k+1)%3]]))
-                        for k in range(3)
-                    ]
-                    # 如果两个面片共享至少一条边，则它们相邻
-                    if any(edge in edges2 for edge in edges1):
-                        face_adjacency[i].add(j)
-
-        # 获取所有相邻面片
-        adjacent_faces = set()
-        for face_id in self.selected_faces:
-            if face_id in face_adjacency:
-                adjacent_faces.update(face_adjacency[face_id])
-
-        # 更新选中的面片（添加相邻面片）
-        self.selected_faces = list(set(self.selected_faces) | adjacent_faces)
-
-        # 更新状态栏信息
-        self.statusBar.showMessage(f'已选择 {len(self.selected_faces)} 个面片')
-
-        # 更新显示
+            # 进度回调函数
+            def update_progress(value, message):
+                progress.setValue(value)
+                progress.setLabelText(message)
+                if progress.wasCanceled():
+                    raise Exception("用户取消")
+            
+            # 清除当前选择
+            self.clear_selection()
+            
+            # 准备面片和顶点数据为numpy数组
+            vertices = np.array(self.mesh_data['vertices'])
+            faces = np.array(self.mesh_data['faces'])
+            
+            # 使用高性能模块检测邻近面片
+            proximity_faces = detect_face_proximity(
+                faces, vertices, threshold, 
+                use_multiprocessing=True, 
+                progress_callback=update_progress
+            )
+            
+            # 将检测到的面片转换为选择
+            if proximity_faces:
+                # 将检测到的面片添加到选择中
+                self.selected_faces = list(proximity_faces)
+                
+                # 更新网格显示
         self.update_display()
+                
+                # 显示结果信息
+                QMessageBox.information(
+                    self, "邻近性分析完成", 
+                    f"检测到 {len(proximity_faces)} 个邻近面片，占总面片数的 {len(proximity_faces)/len(faces)*100:.2f}%。\n"
+                    f"这些面片已被选中。"
+                )
+            else:
+                QMessageBox.information(self, "邻近性分析完成", "未检测到邻近面片。")
+            
+            # 关闭进度对话框
+            progress.setValue(100)
+            
+        except ImportError:
+            QMessageBox.critical(
+                self, "模块缺失", 
+                "无法导入高性能邻近性检测模块。请确保high_performance_proximity.py文件存在于src目录中。"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"邻近性分析失败: {str(e)}")
         
     def select_overlapping_points(self):
         """检测并选择重叠点
@@ -1469,6 +2000,76 @@ class MeshViewerQt(QMainWindow):
                 
         finally:
             progress.close()
-=======
-        print("已清除所有选择") 
->>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762
+
+    def toggle_performance_mode(self):
+        """切换性能模式，在高性能和高质量模式之间切换"""
+        self.high_performance_mode = not self.high_performance_mode
+        
+        # 更新窗口标题
+        mode_name = "高性能模式" if self.high_performance_mode else "高质量模式"
+        self.setWindowTitle(f'Mesh Viewer - {mode_name}')
+        
+        # 获取渲染窗口
+        render_window = self.vtk_widget.GetRenderWindow()
+        
+        if self.high_performance_mode:
+            # 切换到高性能模式
+            render_window.SetMultiSamples(0 if self.is_large_model else 2)  # 减少抗锯齿
+            self.renderer.SetUseDepthPeeling(0)  # 禁用深度剥离
+            try:
+                self.renderer.SetUseFXAA(0)  # 禁用FXAA
+            except AttributeError:
+                pass
+            
+            # 调整点显示
+            self.point_glyph_source = None  # 重置点显示源，强制重新创建
+            self.point_threshold = 200 if self.is_large_model else 500
+            
+            # 显示消息
+            self.statusBar.showMessage('已切换到高性能模式，优化渲染速度')
+        else:
+            # 切换到高质量模式
+            render_window.SetMultiSamples(4)  # 启用抗锯齿
+            self.renderer.SetUseDepthPeeling(1)  # 启用深度剥离提高质量
+            try:
+                self.renderer.SetUseFXAA(1)  # 启用FXAA
+            except AttributeError:
+                pass
+                
+            # 调整点显示
+            self.point_glyph_source = None  # 重置点显示源，强制重新创建
+            self.point_threshold = 500 if self.is_large_model else 2000
+            
+            # 显示消息
+            self.statusBar.showMessage('已切换到高质量模式，提高渲染效果')
+        
+        # 触发重新渲染
+        self.needs_high_res_render = True
+        self.update_display()
+
+    def keyPressEvent(self, event):
+        """处理键盘事件"""
+        # 按P键切换性能模式
+        if event.key() == Qt.Key_P:
+            self.toggle_performance_mode()
+        # 按A键切换坐标轴显示
+        elif event.key() == Qt.Key_A:
+            self.toggle_axes_visibility()
+        else:
+            super().keyPressEvent(event)
+
+    def toggle_axes_visibility(self):
+        """切换坐标轴方向指示器的显示/隐藏"""
+        if hasattr(self, 'orientation_marker') and self.orientation_marker is not None:
+            # 切换坐标轴的可见性
+            is_visible = self.orientation_marker.GetEnabled()
+            self.orientation_marker.SetEnabled(not is_visible)
+            
+            # 更新状态栏信息
+            if not is_visible:
+                self.statusBar.showMessage('已显示坐标轴方向指示器')
+            else:
+                self.statusBar.showMessage('已隐藏坐标轴方向指示器')
+            
+            # 强制重新渲染
+            self.vtk_widget.GetRenderWindow().Render()

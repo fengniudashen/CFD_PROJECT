@@ -1,0 +1,10 @@
+                # 创建点的VTK表示
+                pts = vtk.vtkPoints()
+                vertex_data = vtk.vtkPolyData()
+                colors = vtk.vtkUnsignedCharArray()
+                colors.SetNumberOfComponents(3)
+                colors.SetName("Colors")
+                
+                for idx, (i, is_selected) in enumerate(points_to_display):
+                    pts.InsertNextPoint(self.mesh_data['vertices'][i])
+                    if is_selected:
