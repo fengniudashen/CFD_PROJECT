@@ -1,0 +1,88 @@
+# 贡献指南
+
+非常感谢您对CFD网格处理工具的兴趣！这个文档提供了关于如何为本项目做出贡献的指导。
+
+## 行为准则
+
+请在参与本项目时保持尊重和专业态度。我们期望所有贡献者都能创造一个积极友好的环境。
+
+## 如何贡献
+
+### 报告Bug
+
+如果您发现了Bug，请创建一个Issue并提供以下信息：
+
+1. 简明的问题标题
+2. 详细的问题描述，包括复现步骤
+3. 您的环境信息（操作系统、Python版本、依赖库版本等）
+4. 如可能，提供相关的日志和截图
+
+### 提出新功能
+
+如果您有新功能的想法，请：
+
+1. 创建一个功能请求Issue
+2. 描述您期望的功能以及它将如何改善项目
+3. 如可能，提供功能的技术实现思路
+
+### 提交代码
+
+1. Fork本仓库
+2. 创建您的特性分支：`git checkout -b feature/your-feature-name`
+3. 提交您的更改：`git commit -m 'Add some feature'`
+4. 将更改推送到您的分支：`git push origin feature/your-feature-name`
+5. 提交Pull Request
+
+### 代码风格指南
+
+- 使用PEP 8风格指南
+- 为函数和类添加docstring
+- 代码应当具有良好的可读性和注释
+- 添加单元测试覆盖新功能
+
+## 开发流程
+
+### 开发环境设置
+
+```bash
+# 克隆仓库
+git clone https://github.com/yourusername/CFD_PROJECT.git
+cd CFD_PROJECT
+
+# 创建虚拟环境
+python -m venv CFD
+source CFD/bin/activate  # Linux/macOS
+CFD\Scripts\activate     # Windows
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 安装开发依赖
+pip install pytest flake8 black
+```
+
+### 运行测试
+
+```bash
+pytest
+```
+
+### 代码格式化
+
+```bash
+black .
+```
+
+## Pull Request流程
+
+1. 确保您的代码通过了测试
+2. 更新相关文档
+3. 提交PR并等待审核
+4. 解决审核中提出的问题
+5. 等待合并
+
+## 关于作者
+
+本项目由CFD项目团队开发维护。如有任何问题，请通过Issue联系我们。
+
+感谢您的贡献！ 

@@ -1,7 +1,18 @@
-<<<<<<< HEAD
 # CFD网格处理工具
 
-这是一个用于处理和可视化CFD（计算流体力学）网格的Python工具包。目前支持STL和NAS格式的网格文件读取、处理和可视化。
+这是一个用于处理和可视化CFD（计算流体力学）网格的Python工具包。支持STL和NAS格式的网格文件读取、处理和可视化，并提供先进的网格质量评估和修复工具。
+
+## 版本历史
+
+### V0.0.4 (当前版本)
+- 增加面质量分析器 (`face_quality_analyzer.py`) - 基于STAR-CCM+的质量评估算法
+- 修复了`mesh_viewer_qt.py`中出现的重复if语句错误
+- 优化了性能，改进了大型网格的处理速度
+- 代码稳定性和用户界面改进
+
+### V0.0.3
+- 增加网格可视化界面
+- 支持基本的网格编辑功能
 
 ## 功能特点
 
@@ -9,6 +20,12 @@
 - 提供网格数据的基本处理功能
 - 包含3D网格可视化界面
 - 支持创建标准几何体（如足球形状）的网格
+- 网格质量分析，包括：
+  - 面质量评估（skewness、面积比率等）
+  - 交叉面检测
+  - 相邻面检测
+  - 重叠点和边检测
+  - 自由边检测
 
 ## 安装说明
 
@@ -60,14 +77,39 @@ viewer.show()
 sys.exit(app.exec_())
 ```
 
+### 3. 面质量分析
+```python
+from src.face_quality_analyzer import analyze_face_quality, generate_quality_report
+import numpy as np
+
+# 准备顶点和面数据
+vertices = np.array([...])  # 顶点坐标
+faces = np.array([...])     # 面索引
+
+# 分析面质量
+results = analyze_face_quality(vertices, faces, threshold=0.5)
+
+# 获取质量报告
+report = generate_quality_report(results['stats'])
+print(report)
+```
+
 ## 目录结构
 
 - `src/`: 源代码目录
   - `mesh_reader.py`: 网格文件读取模块
   - `mesh_viewer_qt.py`: 3D可视化界面模块
   - `create_football_mesh.py`: 足球网格生成模块
+  - `face_quality_analyzer.py`: 面质量分析模块
 - `data/`: 示例网格文件
 - `tests/`: 测试文件
+
+## 系统要求
+
+- Python 3.7+
+- PyQt5
+- VTK 9.0+
+- NumPy
 
 ## 贡献指南
 
@@ -82,6 +124,3 @@ sys.exit(app.exec_())
 ## 许可证
 
 这个项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
-=======
- 
->>>>>>> 61808a0fd45044b397c6488dce73d9e755b79762

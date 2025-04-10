@@ -1,3 +1,7 @@
-numpy
-PyQt5
-matplotlib
+numpy>=1.20.0
+PyQt5>=5.15.0
+matplotlib>=3.5.0
+vtk>=9.0.0
+scipy>=1.7.0
+pytest>=6.2.0
+six>=1.16.0
