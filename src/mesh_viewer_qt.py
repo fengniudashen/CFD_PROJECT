@@ -3,8 +3,8 @@ import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QPushButton, QFrame, QLabel, QLineEdit,
                            QGridLayout, QMessageBox, QStatusBar, QProgressDialog, QInputDialog,
-                           QTabWidget, QShortcut)
-from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QColor, QPixmap
+                           QTabWidget, QShortcut, QMenu, QAction)
+from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QColor, QPixmap, QImage, qRgb
 from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -122,6 +122,159 @@ class MeshViewerQt(QMainWindow):
         
         # 创建主布局
         main_layout = QVBoxLayout(main_widget)
+        
+        # 创建顶部按钮栏
+        top_button_bar = QFrame()
+        top_button_bar.setFrameStyle(QFrame.Panel | QFrame.Raised)
+        top_button_bar.setMaximumHeight(40)
+        top_button_layout = QHBoxLayout(top_button_bar)
+        top_button_layout.setContentsMargins(5, 5, 5, 5)
+        top_button_layout.setSpacing(2)
+        
+        # 创建27个按钮
+        for i in range(1, 28):
+            btn = QPushButton(str(i))
+            btn.setFixedSize(40, 30)  # 设置按钮大小
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f0f0f0;
+                    color: #333333;
+                    border: 1px solid #999999;
+                    border-radius: 4px;
+                    padding: 2px;
+                }
+                QPushButton:hover {
+                    background-color: #e0e0e0;
+                    border-color: #666666;
+                }
+            """)
+            
+            # 为按钮1添加特殊功能
+            if i == 1:
+                # 创建重置视图图标
+                reset_icon = QIcon()
+                reset_pixmap = QPixmap(32, 32)
+                reset_pixmap.fill(Qt.transparent)
+                reset_painter = QPainter(reset_pixmap)
+                reset_painter.setRenderHint(QPainter.Antialiasing)
+                
+                # 绘制四个方向的箭头
+                reset_pen = QPen(QColor(0, 0, 0))
+                reset_pen.setWidth(2)
+                reset_painter.setPen(reset_pen)
+                
+                # 绘制左上箭头
+                reset_painter.drawLine(8, 8, 16, 16)  # 主线段
+                reset_painter.drawLine(8, 8, 12, 8)   # 上箭头
+                reset_painter.drawLine(8, 8, 8, 12)   # 左箭头
+                
+                # 绘制右上箭头
+                reset_painter.drawLine(24, 8, 16, 16)  # 主线段
+                reset_painter.drawLine(24, 8, 20, 8)   # 上箭头
+                reset_painter.drawLine(24, 8, 24, 12)  # 右箭头
+                
+                # 绘制左下箭头
+                reset_painter.drawLine(8, 24, 16, 16)  # 主线段
+                reset_painter.drawLine(8, 24, 12, 24)  # 下箭头
+                reset_painter.drawLine(8, 24, 8, 20)   # 左箭头
+                
+                # 绘制右下箭头
+                reset_painter.drawLine(24, 24, 16, 16)  # 主线段
+                reset_painter.drawLine(24, 24, 20, 24)  # 下箭头
+                reset_painter.drawLine(24, 24, 24, 20)  # 右箭头
+                
+                reset_painter.end()
+                reset_icon.addPixmap(reset_pixmap)
+                
+                # 设置按钮属性
+                btn.setIcon(reset_icon)
+                btn.setIconSize(QSize(20, 20))
+                btn.setToolTip("重置视图")
+                btn.clicked.connect(self.reset_camera)
+            
+            # 为按钮2添加相机图标和下拉菜单
+            elif i == 2:
+                # 创建相机图标
+                camera_icon = QIcon()
+                camera_pixmap = QPixmap(32, 32)
+                camera_pixmap.fill(Qt.transparent)
+                camera_painter = QPainter(camera_pixmap)
+                camera_painter.setRenderHint(QPainter.Antialiasing)
+                
+                # 绘制相机主体
+                camera_pen = QPen(QColor(0, 0, 0))
+                camera_pen.setWidth(2)
+                camera_painter.setPen(camera_pen)
+                
+                # 绘制相机主体（矩形）
+                camera_painter.drawRect(8, 8, 16, 12)
+                
+                # 绘制镜头（圆形）
+                camera_painter.drawEllipse(12, 10, 8, 8)
+                
+                # 绘制闪光灯（小矩形）
+                camera_painter.drawRect(20, 6, 4, 2)
+                
+                camera_painter.end()
+                camera_icon.addPixmap(camera_pixmap)
+                
+                # 设置按钮属性
+                btn.setIcon(camera_icon)
+                btn.setIconSize(QSize(20, 20))
+                btn.setToolTip("视图选项")
+                
+                # 创建下拉菜单
+                view_menu = QMenu(btn)
+                
+                # 添加菜单项
+                store_view_action = view_menu.addAction("Store Current View")
+                restore_view_menu = view_menu.addMenu("Restore View")
+                view_menu.addSeparator()
+                projection_menu = view_menu.addMenu("Projection Mode")
+                view_menu.addSeparator()
+                view_menu.addAction("View")
+                standard_views_menu = view_menu.addMenu("Standard Views")
+                view_menu.addSeparator()
+                view_menu.addAction("View Coordinate System")
+                
+                # 添加投影模式子菜单
+                perspective_action = projection_menu.addAction("Perspective")
+                parallel_action = projection_menu.addAction("Parallel")
+                
+                # 添加标准视图子菜单
+                front_action = standard_views_menu.addAction("Front")
+                back_action = standard_views_menu.addAction("Back")
+                left_action = standard_views_menu.addAction("Left")
+                right_action = standard_views_menu.addAction("Right")
+                top_action = standard_views_menu.addAction("Top")
+                bottom_action = standard_views_menu.addAction("Bottom")
+                isometric_action = standard_views_menu.addAction("Isometric")
+                
+                # 连接标准视图菜单项信号
+                front_action.triggered.connect(lambda: self.set_standard_view("front"))
+                back_action.triggered.connect(lambda: self.set_standard_view("back"))
+                left_action.triggered.connect(lambda: self.set_standard_view("left"))
+                right_action.triggered.connect(lambda: self.set_standard_view("right"))
+                top_action.triggered.connect(lambda: self.set_standard_view("top"))
+                bottom_action.triggered.connect(lambda: self.set_standard_view("bottom"))
+                isometric_action.triggered.connect(lambda: self.set_standard_view("isometric"))
+                
+                # 初始化存储的视图列表
+                self.stored_views = []
+                self.view_counter = 0
+                
+                # 连接菜单项信号
+                store_view_action.triggered.connect(lambda: self.store_current_view(restore_view_menu))
+                perspective_action.triggered.connect(lambda: self.set_projection_mode("perspective"))
+                parallel_action.triggered.connect(lambda: self.set_projection_mode("parallel"))
+                
+                # 设置按钮点击事件
+                btn.setMenu(view_menu)
+            
+            top_button_layout.addWidget(btn)
+        
+        # 将顶部按钮栏添加到主布局
+        main_layout.addWidget(top_button_bar)
         
         # 创建内容区域布局（控制面板和VTK窗口）
         content_layout = QHBoxLayout()
@@ -471,6 +624,48 @@ class MeshViewerQt(QMainWindow):
         face_prox_btn.setParent(vtk_frame)
         free_edge_btn.setParent(vtk_frame)
         
+        # 创建左侧9个按钮
+        left_btns = []
+        for i in range(9):
+            left_btn = QPushButton(f"按钮{i+1}")
+            left_btn.setFixedSize(80, 30)
+            left_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f0f0f0;
+                    color: #333333;
+                    border: 1px solid #999999;
+                    border-radius: 4px;
+                    padding: 2px;
+                }
+                QPushButton:hover {
+                    background-color: #e0e0e0;
+                    border-color: #666666;
+                }
+            """)
+            left_btn.setParent(vtk_frame)
+            left_btns.append(left_btn)
+        
+        # 创建顶部8个按钮
+        top_btns = []
+        for i in range(8):
+            top_btn = QPushButton(f"按钮{i+1}")
+            top_btn.setFixedSize(30, 30)  # 将按钮改为30x30的正方形
+            top_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f0f0f0;
+                    color: #333333;
+                    border: 1px solid #999999;
+                    border-radius: 4px;
+                    padding: 2px;
+                }
+                QPushButton:hover {
+                    background-color: #e0e0e0;
+                    border-color: #666666;
+                }
+            """)
+            top_btn.setParent(vtk_frame)
+            top_btns.append(top_btn)
+        
         # 设置按钮位置
         fast_intersection_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 120))
         face_quality_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 85))
@@ -478,6 +673,16 @@ class MeshViewerQt(QMainWindow):
         free_edge_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 15))
         overlap_edge_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 + 20))  # 重叠边按钮在自由边按钮下方
         overlap_point_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 + 55))  # 重叠点按钮位置下移
+        
+        # 定位左侧9个按钮（紧挨在一起无缝隙）
+        for i, btn in enumerate(left_btns):
+            btn.move(10, int(vtk_frame.height() / 2 - 135 + i * 30))  # 从中间位置开始，每个按钮高度30px
+        
+        # 定位顶部8个按钮（紧挨在一起无缝隙）
+        total_width = 30 * 8  # 8个按钮的总宽度 (30px每个)
+        start_x = (vtk_frame.width() - total_width) // 2  # 计算起始位置使按钮在中间
+        for i, btn in enumerate(top_btns):
+            btn.move(start_x + i * 30, 10)  # 顶部位置，水平排列
         
         # 当VTK窗口大小改变时，更新按钮位置
         def update_button_positions(event):
@@ -488,6 +693,16 @@ class MeshViewerQt(QMainWindow):
             overlap_edge_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 + 20))  # 重叠边按钮在自由边按钮下方
             overlap_point_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 + 55))  # 重叠点按钮位置下移
             perf_mode_btn.move(20, 20)  # 保持在左上角
+            
+            # 更新左侧9个按钮位置
+            for i, btn in enumerate(left_btns):
+                btn.move(10, int(vtk_frame.height() / 2 - 135 + i * 30))
+            
+            # 更新顶部8个按钮位置
+            total_width = 30 * 8  # 8个按钮的总宽度 (30px每个)
+            start_x = (vtk_frame.width() - total_width) // 2  # 重新计算起始位置
+            for i, btn in enumerate(top_btns):
+                btn.move(start_x + i * 30, 10)
         
         vtk_frame.resizeEvent = update_button_positions
         
@@ -1367,10 +1582,7 @@ class MeshViewerQt(QMainWindow):
         self.vtk_widget.GetRenderWindow().GetInteractor().SetDesiredUpdateRate(30.0)
         self.vtk_widget.GetRenderWindow().Render()
         
-        # 确保坐标轴方向指示器也被更新
-        if hasattr(self, 'orientation_marker') and self.orientation_marker is not None:
-            self.orientation_marker.UpdateMarkerOrientation()
-            self.orientation_marker.Render()
+        # 方向指示器会自动跟随相机方向，不需要手动更新
     
     def clear_all_selections(self):
         """清除所有选择"""
@@ -1985,3 +2197,156 @@ class MeshViewerQt(QMainWindow):
             
             # 强制重新渲染
             self.vtk_widget.GetRenderWindow().Render()
+
+    def store_current_view(self, restore_view_menu):
+        """存储当前视图并生成截图"""
+        # 获取当前视图的相机参数
+        camera = self.renderer.GetActiveCamera()
+        view_data = {
+            'position': camera.GetPosition(),
+            'focal_point': camera.GetFocalPoint(),
+            'view_up': camera.GetViewUp(),
+            'view_angle': camera.GetViewAngle(),
+            'parallel_scale': camera.GetParallelScale()
+        }
+        
+        # 生成小截图
+        render_window = self.vtk_widget.GetRenderWindow()
+        render_window.Render()
+        
+        # 获取渲染窗口的图像
+        w2if = vtk.vtkWindowToImageFilter()
+        w2if.SetInput(render_window)
+        w2if.SetScale(1)  # 保持原始大小
+        w2if.Update()
+        
+        # 将VTK图像转换为QImage
+        vtk_image = w2if.GetOutput()
+        width = vtk_image.GetDimensions()[0]
+        height = vtk_image.GetDimensions()[1]
+        
+        # 创建QImage
+        qimage = QImage(width, height, QImage.Format_RGB888)
+        
+        # 将VTK图像数据复制到QImage
+        for y in range(height):
+            for x in range(width):
+                pixel = vtk_image.GetScalarComponentAsFloat(x, y, 0, 0)
+                r = int(pixel * 255)
+                g = int(vtk_image.GetScalarComponentAsFloat(x, y, 0, 1) * 255)
+                b = int(vtk_image.GetScalarComponentAsFloat(x, y, 0, 2) * 255)
+                qimage.setPixel(x, y, qRgb(r, g, b))
+        
+        # 缩放图像为小图标大小
+        thumbnail = qimage.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        
+        # 创建图标
+        icon = QIcon(QPixmap.fromImage(thumbnail))
+        
+        # 增加计数器
+        self.view_counter += 1
+        
+        # 创建新的菜单项
+        view_name = f"View {self.view_counter}"
+        view_action = QAction(icon, view_name, self)
+        
+        # 存储视图数据
+        self.stored_views.append({
+            'data': view_data,
+            'action': view_action
+        })
+        
+        # 将新视图添加到菜单的最前面
+        restore_view_menu.insertAction(restore_view_menu.actions()[0] if restore_view_menu.actions() else None, view_action)
+        
+        # 连接恢复视图的信号
+        view_action.triggered.connect(lambda: self.restore_specific_view(view_data))
+        
+        # 显示状态消息
+        self.statusBar.showMessage(f'已存储视图 {self.view_counter}')
+    
+    def restore_specific_view(self, view_data):
+        """恢复特定的存储视图"""
+        camera = self.renderer.GetActiveCamera()
+        camera.SetPosition(view_data['position'])
+        camera.SetFocalPoint(view_data['focal_point'])
+        camera.SetViewUp(view_data['view_up'])
+        camera.SetViewAngle(view_data['view_angle'])
+        camera.SetParallelScale(view_data['parallel_scale'])
+        self.vtk_widget.GetRenderWindow().Render()
+        self.statusBar.showMessage('已恢复存储的视图')
+
+    def set_projection_mode(self, mode):
+        """设置投影模式"""
+        camera = self.renderer.GetActiveCamera()
+        if mode == "perspective":
+            camera.SetParallelProjection(False)
+            self.statusBar.showMessage('已切换到透视投影模式')
+        else:  # parallel
+            camera.SetParallelProjection(True)
+            self.statusBar.showMessage('已切换到平行投影模式')
+        self.vtk_widget.GetRenderWindow().Render()
+
+    def set_standard_view(self, view_type):
+        """设置标准视图"""
+        camera = self.renderer.GetActiveCamera()
+        
+        # 获取模型的边界框
+        bounds = self.mesh.GetBounds()
+        center = [(bounds[1] + bounds[0])/2, 
+                 (bounds[3] + bounds[2])/2, 
+                 (bounds[5] + bounds[4])/2]
+        
+        # 计算合适的相机距离
+        diagonal = np.sqrt((bounds[1]-bounds[0])**2 + 
+                          (bounds[3]-bounds[2])**2 + 
+                          (bounds[5]-bounds[4])**2)
+        
+        # 根据视图类型设置相机位置和方向
+        if view_type == "front":
+            camera.SetPosition(center[0], center[1], center[2] + diagonal)
+            camera.SetFocalPoint(center[0], center[1], center[2])
+            camera.SetViewUp(0, 1, 0)
+            self.statusBar.showMessage('已切换到前视图')
+            
+        elif view_type == "back":
+            camera.SetPosition(center[0], center[1], center[2] - diagonal)
+            camera.SetFocalPoint(center[0], center[1], center[2])
+            camera.SetViewUp(0, 1, 0)
+            self.statusBar.showMessage('已切换到后视图')
+            
+        elif view_type == "left":
+            camera.SetPosition(center[0] - diagonal, center[1], center[2])
+            camera.SetFocalPoint(center[0], center[1], center[2])
+            camera.SetViewUp(0, 1, 0)
+            self.statusBar.showMessage('已切换到左视图')
+            
+        elif view_type == "right":
+            camera.SetPosition(center[0] + diagonal, center[1], center[2])
+            camera.SetFocalPoint(center[0], center[1], center[2])
+            camera.SetViewUp(0, 1, 0)
+            self.statusBar.showMessage('已切换到右视图')
+            
+        elif view_type == "top":
+            camera.SetPosition(center[0], center[1] + diagonal, center[2])
+            camera.SetFocalPoint(center[0], center[1], center[2])
+            camera.SetViewUp(0, 0, -1)
+            self.statusBar.showMessage('已切换到顶视图')
+            
+        elif view_type == "bottom":
+            camera.SetPosition(center[0], center[1] - diagonal, center[2])
+            camera.SetFocalPoint(center[0], center[1], center[2])
+            camera.SetViewUp(0, 0, 1)
+            self.statusBar.showMessage('已切换到底视图')
+            
+        elif view_type == "isometric":
+            # 等轴测视图：从45度角观察
+            distance = diagonal * 1.5
+            camera.SetPosition(center[0] + distance, center[1] + distance, center[2] + distance)
+            camera.SetFocalPoint(center[0], center[1], center[2])
+            camera.SetViewUp(0, 0, 1)
+            self.statusBar.showMessage('已切换到等轴测视图')
+        
+        # 更新渲染
+        self.renderer.ResetCameraClippingRange()
+        self.vtk_widget.GetRenderWindow().Render()
