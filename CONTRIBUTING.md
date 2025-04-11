@@ -46,7 +46,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/yourusername/CFD_PROJECT.git
+git clone https://github.com/fengniudashen/CFD_PROJECT.git
 cd CFD_PROJECT
 
 # 创建虚拟环境
@@ -72,6 +72,18 @@ pytest
 ```bash
 black .
 ```
+
+## 当前版本（V0.0.6）重点贡献方向
+
+我们正在寻求以下方面的贡献：
+
+1. **错误修复**：重点关注UI布局和数字标签交互的改进
+2. **性能优化**：提高大规模网格模型的处理效率
+3. **功能扩展**：
+   - 改进数字标签的交互功能
+   - 添加更多分析工具和对应的标签显示
+   - 实现分析结果导出功能
+4. **文档改进**：完善中文和英文文档
 
 ## Pull Request流程
 

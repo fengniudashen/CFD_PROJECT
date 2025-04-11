@@ -129,7 +129,8 @@ class MeshViewerQt(QMainWindow):
         top_button_bar.setMaximumHeight(40)
         top_button_layout = QHBoxLayout(top_button_bar)
         top_button_layout.setContentsMargins(5, 5, 5, 5)
-        top_button_layout.setSpacing(2)
+        top_button_layout.setSpacing(0)  # 将间距设为0，让按钮紧挨在一起
+        top_button_layout.addStretch(1)  # 添加弹性空间，将按钮靠右对齐
         
         # 创建27个按钮
         for i in range(1, 28):
@@ -467,7 +468,7 @@ class MeshViewerQt(QMainWindow):
         fast_intersection_btn = QPushButton('交叉面')
         fast_intersection_btn.setIcon(fast_intersection_icon)
         fast_intersection_btn.setIconSize(QSize(20, 20))
-        fast_intersection_btn.setFixedSize(100, 30)
+        fast_intersection_btn.setFixedSize(80, 30)
         fast_intersection_btn.setStyleSheet("""
             QPushButton {
                 background-color: #f0f0f0;
@@ -667,12 +668,108 @@ class MeshViewerQt(QMainWindow):
             top_btns.append(top_btn)
         
         # 设置按钮位置
-        fast_intersection_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 120))
-        face_quality_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 85))
-        face_prox_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 50))
-        free_edge_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 15))
-        overlap_edge_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 + 20))  # 重叠边按钮在自由边按钮下方
-        overlap_point_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 + 55))  # 重叠点按钮位置下移
+        # 设置右侧按钮位置，紧挨在一起没有缝隙
+        button_height = 30  # 按钮高度
+        total_right_buttons = 6  # 右侧按钮总数
+        right_start_y = int(vtk_frame.height() / 2) - ((total_right_buttons * button_height) // 2)  # 让按钮组居中
+        
+        # 创建右侧按钮的数字标签
+        self.intersection_count = QLabel("未分析", vtk_frame)
+        self.quality_count = QLabel("未分析", vtk_frame)
+        self.proximity_count = QLabel("未分析", vtk_frame)
+        self.free_edge_count = QLabel("未分析", vtk_frame)
+        self.overlap_edge_count = QLabel("未分析", vtk_frame)
+        self.overlap_point_count = QLabel("未分析", vtk_frame)
+
+        # 设置标签样式
+        label_style = """
+            QLabel {
+                background-color: #f0f0f0;
+                color: #333333;
+                border: 1px solid #999999;
+                border-radius: 4px;
+                padding: 2px;
+                min-width: 50px;
+                max-width: 50px;
+                qproperty-alignment: AlignCenter;
+            }
+        """
+        
+        # 应用样式到所有标签
+        for label in [self.intersection_count, self.quality_count, self.proximity_count,
+                     self.free_edge_count, self.overlap_edge_count, self.overlap_point_count]:
+            label.setStyleSheet(label_style)
+            label.setFixedSize(50, 30)
+            # 设置基础字体
+            font = QFont('Arial', 9)
+            font.setBold(True)
+            label.setFont(font)
+            
+        # 添加自动调整字体大小的方法
+        def adjust_font_size(label, text):
+            # 如果是数字，根据长度调整字体大小
+            if text.isdigit():
+                # 获取当前字体
+                font = label.font()
+                # 根据数字位数调整字体大小
+                length = len(text)
+                if length <= 1:
+                    font.setPointSize(12)  # 1位数字使用最大字体
+                elif length == 2:
+                    font.setPointSize(11)
+                elif length == 3:
+                    font.setPointSize(10)
+                elif length == 4:
+                    font.setPointSize(9)
+                elif length == 5:
+                    font.setPointSize(8)
+                elif length == 6:
+                    font.setPointSize(7)
+                else:  # 7位或更多
+                    font.setPointSize(6)  # 7位数字使用最小字体
+                
+                # 设置新字体
+                label.setFont(font)
+            else:
+                # 非数字文本（如"未分析"）使用固定字体大小
+                font = QFont('Arial', 9)
+                font.setBold(True)
+                label.setFont(font)
+                
+            # 更新文本
+            label.setText(text)
+            
+        # 保存方法供后续使用
+        self.adjust_font_size = adjust_font_size
+        
+        # 添加重置标签方法
+        def reset_label(label):
+            font = QFont('Arial', 9)
+            font.setBold(True)
+            label.setFont(font)
+            label.setText("未分析")
+            
+        # 保存重置方法供后续使用
+        self.reset_label = reset_label
+        
+        # 设置按钮和标签位置
+        fast_intersection_btn.move(vtk_frame.width() - 130, right_start_y)
+        self.intersection_count.move(vtk_frame.width() - 50, right_start_y)
+        
+        face_quality_btn.move(vtk_frame.width() - 130, right_start_y + button_height)
+        self.quality_count.move(vtk_frame.width() - 50, right_start_y + button_height)
+        
+        face_prox_btn.move(vtk_frame.width() - 130, right_start_y + button_height * 2)
+        self.proximity_count.move(vtk_frame.width() - 50, right_start_y + button_height * 2)
+        
+        free_edge_btn.move(vtk_frame.width() - 130, right_start_y + button_height * 3)
+        self.free_edge_count.move(vtk_frame.width() - 50, right_start_y + button_height * 3)
+        
+        overlap_edge_btn.move(vtk_frame.width() - 130, right_start_y + button_height * 4)
+        self.overlap_edge_count.move(vtk_frame.width() - 50, right_start_y + button_height * 4)
+        
+        overlap_point_btn.move(vtk_frame.width() - 130, right_start_y + button_height * 5)
+        self.overlap_point_count.move(vtk_frame.width() - 50, right_start_y + button_height * 5)
         
         # 定位左侧9个按钮（紧挨在一起无缝隙）
         for i, btn in enumerate(left_btns):
@@ -686,12 +783,30 @@ class MeshViewerQt(QMainWindow):
         
         # 当VTK窗口大小改变时，更新按钮位置
         def update_button_positions(event):
-            fast_intersection_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 120))
-            face_quality_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 85))
-            face_prox_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 50))
-            free_edge_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 - 15))
-            overlap_edge_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 + 20))  # 重叠边按钮在自由边按钮下方
-            overlap_point_btn.move(vtk_frame.width() - 90, int(vtk_frame.height() / 2 + 55))  # 重叠点按钮位置下移
+            # 更新右侧按钮位置，紧挨在一起没有缝隙
+            button_height = 30  # 按钮高度
+            total_right_buttons = 6  # 右侧按钮总数
+            right_start_y = int(vtk_frame.height() / 2) - ((total_right_buttons * button_height) // 2)  # 让按钮组居中
+            
+            # 更新按钮和标签位置
+            fast_intersection_btn.move(vtk_frame.width() - 130, right_start_y)
+            self.intersection_count.move(vtk_frame.width() - 50, right_start_y)
+            
+            face_quality_btn.move(vtk_frame.width() - 130, right_start_y + button_height)
+            self.quality_count.move(vtk_frame.width() - 50, right_start_y + button_height)
+            
+            face_prox_btn.move(vtk_frame.width() - 130, right_start_y + button_height * 2)
+            self.proximity_count.move(vtk_frame.width() - 50, right_start_y + button_height * 2)
+            
+            free_edge_btn.move(vtk_frame.width() - 130, right_start_y + button_height * 3)
+            self.free_edge_count.move(vtk_frame.width() - 50, right_start_y + button_height * 3)
+            
+            overlap_edge_btn.move(vtk_frame.width() - 130, right_start_y + button_height * 4)
+            self.overlap_edge_count.move(vtk_frame.width() - 50, right_start_y + button_height * 4)
+            
+            overlap_point_btn.move(vtk_frame.width() - 130, right_start_y + button_height * 5)
+            self.overlap_point_count.move(vtk_frame.width() - 50, right_start_y + button_height * 5)
+            
             perf_mode_btn.move(20, 20)  # 保持在左上角
             
             # 更新左侧9个按钮位置
@@ -1158,6 +1273,9 @@ class MeshViewerQt(QMainWindow):
             self.statusBar.showMessage(f'创建新点: X={x:.3f}, Y={y:.3f}, Z={z:.3f}')
             self.update_display()
             
+            # 由于模型已改变，重新进行检测
+            self.update_model_analysis()
+            
         except ValueError:
             QMessageBox.warning(self, "输入错误", "请输入有效的数值坐标")
     
@@ -1516,6 +1634,10 @@ class MeshViewerQt(QMainWindow):
         self.selected_faces = []
         print("已删除选中的面")
         self.update_display()
+        
+        # 由于模型已改变，重新进行检测
+        self.update_model_analysis()
+        self.statusBar.showMessage(f'已删除 {len(self.mesh_data["faces"])} 个面片')
     
     def create_face(self):
         """从选中的点创建面"""
@@ -1533,29 +1655,43 @@ class MeshViewerQt(QMainWindow):
         # 更新显示
         self.update_display()
         print(f"创建了新面: {new_face}")
+        
+        # 由于模型已改变，重新进行检测
+        self.update_model_analysis()
     
     def clear_selection(self):
-        """清除所有选择"""
-        self.selected_points = []
-        self.selected_edges = []
-        self.selected_faces = []
+        """清除当前选择"""
+        if self.selection_mode == 'point':
+            self.selected_points = []
+        elif self.selection_mode == 'edge':
+            self.selected_edges = []
+        elif self.selection_mode == 'face':
+            self.selected_faces = []
+        # 更新显示
         self.update_display()
-        print("已清除选择")
+        # 不重置数字标签，只更新状态栏
+        self.update_status_counts()
     
     def clear_points(self):
         """清除选中的点"""
         self.selected_points = []
         self.update_display()
+        # 不重置点数量标签，只更新状态栏
+        self.update_status_counts()
     
     def clear_edges(self):
-        """清除选中的边"""
+        """清除选中的线"""
         self.selected_edges = []
         self.update_display()
+        # 不重置边数量标签，只更新状态栏
+        self.update_status_counts()
     
     def clear_faces(self):
         """清除选中的面"""
         self.selected_faces = []
         self.update_display()
+        # 不重置面数量标签，只更新状态栏
+        self.update_status_counts()
     
     def reset_camera(self):
         """重置相机位置以显示整个模型"""
@@ -1586,11 +1722,15 @@ class MeshViewerQt(QMainWindow):
     
     def clear_all_selections(self):
         """清除所有选择"""
-        self.selected_points = []
-        self.selected_edges = []
         self.selected_faces = []
+        self.selected_edges = []
+        self.selected_points = []
         self.update_display()
-        print("已清除所有选择") 
+        
+        # 不重置数字标签，保持之前的分析结果
+        # 只更新状态栏
+        self.update_status_counts()
+        self.statusBar.showMessage('已清除所有选择')
 
     def select_free_edges(self):
         """选择自由边"""
@@ -1622,9 +1762,16 @@ class MeshViewerQt(QMainWindow):
         # 更新显示
         self.update_display()
         
+        # 检查是否找到了自由边
+        if len(self.selected_edges) > 0:
+            # 更新数字标签为实际数量
+            self.adjust_font_size(self.free_edge_count, str(len(self.selected_edges)))
+        else:
+            # 如果没有找到，显示为0
+            self.adjust_font_size(self.free_edge_count, "0")
+        
         # 更新状态栏显示
-        self.edge_count.setText(str(len(self.selected_edges)))
-        self.statusBar.showMessage(f'已选择 {len(self.selected_edges)} 条自由边')
+        self.adjust_font_size(self.free_edge_count, str(len(self.selected_edges)))
 
     def select_overlapping_edges(self):
         """检测并选择重叠边"""
@@ -1657,9 +1804,16 @@ class MeshViewerQt(QMainWindow):
         # 更新显示
         self.update_display()
         
+        # 检查是否找到了重叠边
+        if len(self.selected_edges) > 0:
+            # 更新数字标签为实际数量
+            self.adjust_font_size(self.overlap_edge_count, str(len(self.selected_edges)))
+        else:
+            # 如果没有找到，显示为0
+            self.adjust_font_size(self.overlap_edge_count, "0")
+        
         # 更新状态栏显示
-        self.edge_count.setText(str(len(self.selected_edges)))
-        self.statusBar.showMessage(f'找到 {len(self.selected_edges)} 条重叠边')
+        self.adjust_font_size(self.overlap_edge_count, str(len(self.selected_edges)))
 
     def create_octree(self, faces, vertices, max_depth=10, min_faces=10):
         """创建八叉树空间分区"""
@@ -1872,6 +2026,14 @@ class MeshViewerQt(QMainWindow):
             # 更新显示
             self.update_display()
             
+            # 检查是否找到了相交面
+            if len(self.selected_faces) > 0:
+                # 更新数字标签为实际数量
+                self.adjust_font_size(self.intersection_count, str(len(self.selected_faces)))
+            else:
+                # 如果没有找到，显示为0
+                self.adjust_font_size(self.intersection_count, "0")
+            
             # 更新状态栏信息
             if cancelled:
                 self.statusBar.showMessage('交叉面检测已取消')
@@ -1953,6 +2115,14 @@ class MeshViewerQt(QMainWindow):
             # 显示结果消息
             self.statusBar.showMessage(f'已选中 {len(self.selected_faces)} 个质量低于 {threshold} 的面片')
             
+            # 检查是否找到了质量问题面片
+            if len(self.selected_faces) > 0:
+                # 更新数字标签为实际数量
+                self.adjust_font_size(self.quality_count, str(len(self.selected_faces)))
+            else:
+                # 如果没有找到，显示为0
+                self.adjust_font_size(self.quality_count, "0")
+            
         except Exception as e:
             QMessageBox.critical(self, "错误", f"面片质量分析失败: {str(e)}")
         finally:
@@ -2031,6 +2201,14 @@ class MeshViewerQt(QMainWindow):
             # 关闭进度对话框
             progress.setValue(100)
             
+            # 检查是否找到了邻近面片
+            if len(self.selected_faces) > 0:
+                # 更新数字标签为实际数量
+                self.adjust_font_size(self.proximity_count, str(len(self.selected_faces)))
+            else:
+                # 如果没有找到，显示为0
+                self.adjust_font_size(self.proximity_count, "0")
+            
         except ImportError:
             QMessageBox.critical(
                 self, "模块缺失", 
@@ -2102,6 +2280,14 @@ class MeshViewerQt(QMainWindow):
             # 更新显示
             progress.setValue(100)
             self.update_display()
+            
+            # 检查是否找到了重叠点
+            if len(self.selected_points) > 0:
+                # 更新数字标签为实际数量
+                self.adjust_font_size(self.overlap_point_count, str(len(self.selected_points)))
+            else:
+                # 如果没有找到，显示为0
+                self.adjust_font_size(self.overlap_point_count, "0")
             
             # 更新状态栏
             if progress.wasCanceled():
@@ -2350,3 +2536,88 @@ class MeshViewerQt(QMainWindow):
         # 更新渲染
         self.renderer.ResetCameraClippingRange()
         self.vtk_widget.GetRenderWindow().Render()
+
+    def update_model_analysis(self):
+        """当模型变化时重新进行各种分析"""
+        # 只在模型发生实际变化时调用此方法
+        
+        # 记录之前的分析状态
+        had_intersection_analysis = self.intersection_count.text() != "未分析"
+        had_quality_analysis = self.quality_count.text() != "未分析"  
+        had_proximity_analysis = self.proximity_count.text() != "未分析"
+        had_free_edge_analysis = self.free_edge_count.text() != "未分析"
+        had_overlap_edge_analysis = self.overlap_edge_count.text() != "未分析"
+        had_overlap_point_analysis = self.overlap_point_count.text() != "未分析"
+        
+        # 如果之前进行过分析，则重新运行对应的检测
+        if had_intersection_analysis:
+            # 静默运行交叉面检测（不显示进度条和消息）
+            self.run_silent_detection(self.detect_face_intersections, "交叉面")
+            
+        if had_quality_analysis:
+            # 静默运行面质量检测
+            self.run_silent_detection(self.analyze_face_quality, "面质量")
+            
+        if had_proximity_analysis:
+            # 静默运行相邻面检测
+            self.run_silent_detection(self.select_adjacent_faces, "相邻面")
+            
+        if had_free_edge_analysis:
+            # 静默运行自由边检测
+            temp_edges = self.selected_edges.copy()  # 备份当前选择
+            self.select_free_edges()  # 运行检测
+            # 还原之前的选择状态
+            selection = self.selected_edges.copy()  # 保存检测结果
+            self.selected_edges = temp_edges  # 还原选择
+            self.update_display()
+            # 只更新标签，不改变当前选择
+            self.adjust_font_size(self.free_edge_count, str(len(selection)))
+            
+        if had_overlap_edge_analysis:
+            # 静默运行重叠边检测
+            self.run_silent_detection(self.select_overlapping_edges, "重叠边")
+            
+        if had_overlap_point_analysis:
+            # 静默运行重叠点检测
+            self.run_silent_detection(self.select_overlapping_points, "重叠点")
+    
+    def run_silent_detection(self, detection_func, detection_type):
+        """静默运行检测函数（不显示进度条和消息）"""
+        try:
+            # 备份当前选择状态
+            temp_faces = self.selected_faces.copy()
+            temp_edges = self.selected_edges.copy()
+            temp_points = self.selected_points.copy()
+            
+            # 运行检测函数
+            detection_func()
+            
+            # 备份检测结果
+            if detection_type in ["交叉面", "面质量", "相邻面"]:
+                selection = self.selected_faces.copy()
+            elif detection_type in ["自由边", "重叠边"]:
+                selection = self.selected_edges.copy()
+            elif detection_type == "重叠点":
+                selection = self.selected_points.copy()
+            
+            # 还原之前的选择状态
+            self.selected_faces = temp_faces
+            self.selected_edges = temp_edges
+            self.selected_points = temp_points
+            self.update_display()
+            
+            # 根据检测类型更新对应标签
+            if detection_type == "交叉面":
+                self.adjust_font_size(self.intersection_count, str(len(selection)))
+            elif detection_type == "面质量":
+                self.adjust_font_size(self.quality_count, str(len(selection)))
+            elif detection_type == "相邻面":
+                self.adjust_font_size(self.proximity_count, str(len(selection)))
+            elif detection_type == "重叠边":
+                self.adjust_font_size(self.overlap_edge_count, str(len(selection)))
+            elif detection_type == "重叠点":
+                self.adjust_font_size(self.overlap_point_count, str(len(selection)))
+                
+        except Exception as e:
+            # 静默捕获异常，不显示错误消息
+            print(f"静默检测时发生错误: {detection_type} - {str(e)}")
