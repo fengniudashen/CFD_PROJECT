@@ -1,8 +1,16 @@
 # CFD网格处理工具
 
-这是一个用于处理和可视化CFD（计算流体力学）网格的Python工具包。支持STL和NAS格式的网格文件读取、处理和可视化，并提供先进的网格质量评估和修复工具。
+这是一个用于处理和可视化CFD（计算流体力学）网格的Python工具包。支持STL和NAS格式的网格文件读取、处理和可视化，并提供先进的网格质量评估和修复工具。该项目包含高性能C++库，可显著提升大型网格处理速度。
 
 ## 版本历史
+
+### C0.0.2 (开发中)
+
+* 添加了高性能C++实现的自由边检测库（free_edges_cpp）
+* 更新了mesh_reader库的C++实现，提高大型网格文件的读取性能
+* 优化了网格处理性能，支持超过100万面的大型模型
+* 完善了C++库文档和构建指南
+* [查看C++库文档](CPP_LIBRARIES.md)
 
 ### C0.0.1 (当前开发版本)
 
@@ -11,6 +19,15 @@
 * 增强了STL文件的导入/导出功能
 * 改进了网格信息统计功能
 * 增加了基本的3D可视化界面
+
+### V0.0.7 (最新稳定版本)
+
+* 优化了生成大型NAS文件的功能，支持处理超过100万个节点的模型
+* 修复了三角剖分阶段的索引错误问题
+* 改进了多线程性能，提高大型模型处理效率
+* 添加了高性能点云处理功能
+* 增强了内存管理，减少大型模型处理的内存占用
+* 优化了用户界面响应速度
 
 ### V0.0.6 (稳定版本)
 
@@ -150,14 +167,24 @@ main()
 
 - `src/`: 源代码目录
   - `mesh_reader.py`: 网格文件读取模块
+  - `mesh_reader.cpp/hpp`: C++实现的高性能网格读取库
   - `mesh_viewer_qt.py`: 3D可视化界面模块
+  - `mesh_viewer_qt_cpp.py`: 集成C++库的高性能可视化界面
   - `create_football_mesh.py`: 足球网格生成模块
   - `face_quality_analyzer.py`: 面质量分析模块
   - `face_proximity_analyzer.py`: 面片邻近分析模块
   - `high_performance_proximity.py`: 高性能邻近检测模块
+  - `free_edges_detector.cpp`: C++实现的自由边检测库
+  - `setup.py`: C++库构建脚本
+  - `compare_free_edges.py`: C++与Python性能对比工具
   - `icons/`: 界面图标资源目录
+- `docs/`: 文档目录
+  - `free_edges_cpp.md`: 自由边检测库文档
+  - `mesh_reader.md`: 网格读取库文档
+  - `build_guide.md`: C++库构建指南
 - `data/`: 示例网格文件
 - `tests/`: 测试文件
+- `CPP_LIBRARIES.md`: C++库总览文档
 - `CFD/`: 虚拟环境目录（不包含在版本控制中）
 
 ## 系统要求
@@ -167,6 +194,44 @@ main()
 - VTK 9.0+
 - NumPy 1.20+
 - SciPy 1.7+
+- threadpoolctl 3.1+ (用于多线程控制)
+- psutil 5.9+ (用于内存管理)
+
+### C++库额外要求
+
+- C++14兼容的编译器
+- CMake 3.10+ (可选，用于高级构建)
+- pybind11 (Python绑定)
+- Eigen 3.3+ (矩阵运算)
+
+## 高性能C++库
+
+本项目包含两个高性能C++库，专为处理大型网格模型而设计：
+
+### free_edges_cpp 自由边检测库
+
+- 高效检测网格中的自由边（仅与一个面相连的边）
+- 比Python实现快约1.4倍
+- 完全集成到网格查看器中
+- [查看详细文档](docs/free_edges_cpp.md)
+
+```python
+# 使用示例
+import free_edges_cpp
+free_edges, time = free_edges_cpp.detect_free_edges_with_timing(faces)
+print(f"检测到{len(free_edges)}条自由边，用时{time:.4f}秒")
+```
+
+### mesh_reader 网格读取库
+
+- 支持NAS/Nastran和STL格式
+- 高效内存管理，针对大型模型优化
+- 两遍读取策略，预分配内存提高性能
+- [查看详细文档](docs/mesh_reader.md)
+
+## 构建C++库
+
+请参阅[构建指南](docs/build_guide.md)获取详细的构建步骤。
 
 ## 贡献指南
 
