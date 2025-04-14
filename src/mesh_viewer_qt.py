@@ -14,6 +14,9 @@ from typing import Dict
 import time
 import gc  # 用于垃圾回收
 from PyQt5.QtGui import QKeySequence
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+import traceback
 
 class StatusIndicator(QFrame):
     def __init__(self, title, parent=None):
@@ -2046,87 +2049,99 @@ class MeshViewerQt(QMainWindow):
             progress.close()
 
     def analyze_face_quality(self):
-        """分析面片质量，使用外部面片质量分析模块"""
-        from PyQt5.QtWidgets import QInputDialog, QMessageBox, QProgressDialog
-        from PyQt5.QtCore import Qt
-        import vtk
+        """
+        使用STAR-CCM+的算法分析面片质量
         
-        # 导入面片质量分析模块
+        STAR-CCM+的面片质量算法: face quality = 2 * (r/R)
+        其中：
+        r = 内接圆半径
+        R = 外接圆半径
+        """
         try:
-            from face_quality_analyzer import analyze_face_quality, generate_quality_report
-        except ImportError:
-            QMessageBox.critical(self, "错误", "无法导入面片质量分析模块，请确保face_quality_analyzer.py在正确的路径中")
-            return
-
-        # 弹出对话框要求用户输入质量阈值
-        threshold, ok = QInputDialog.getDouble(
-            self, '面片质量阈值', 
-            '请输入面片质量阈值 (0-1):', 
-            value=0.5, 
-            min=0.01, 
-            max=0.99, 
-            decimals=2
-        )
-        
-        if not ok:
-            return
-
-        # 清除当前选择
-        self.clear_selection()
-
-        # 创建进度对话框
-        progress = QProgressDialog("分析面片质量...", "取消", 0, 100, self)
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.show()
-        
-        # 进度回调函数
-        def update_progress(value, message):
-            if progress.wasCanceled():
-                return False
-            progress.setValue(value)
-            progress.setLabelText(message)
-            return True
-        
-        try:
-            # 准备数据
-            vertices = self.mesh_data['vertices']
-            faces = self.mesh_data['faces']
+            # 导入STAR-CCM+面片质量分析算法
+            from star_ccm_face_quality import analyze_face_quality, generate_quality_report
+            import numpy as np
+            import vtk
+            from PyQt5.QtWidgets import QInputDialog, QProgressDialog, QMessageBox
+            import matplotlib.cm as cm
+            import matplotlib.colors as mcolors
             
-            # 调用外部模块分析面片质量
-            results = analyze_face_quality(vertices, faces, threshold, update_progress)
-            
-            if progress.wasCanceled():
+            # 获取网格数据
+            if not self.mesh_data or 'vertices' not in self.mesh_data or 'faces' not in self.mesh_data:
+                QMessageBox.warning(self, "错误", "没有可用的网格数据")
                 return
             
-            # 更新选中的面片
+            # 获取用户输入的质量阈值
+            threshold, ok = QInputDialog.getDouble(
+                self, "设置面片质量阈值", 
+                "请输入质量阈值 (0.01-0.95)，较小的值表示更低的质量标准:",
+                0.3, 0.01, 0.95, 2)
+            
+            if not ok:
+                return
+            
+            # 创建进度对话框
+            progress = QProgressDialog("分析面片质量...", "取消", 0, 100, self)
+            progress.setWindowTitle("STAR-CCM+面片质量分析")
+            progress.setMinimumDuration(0)
+            progress.setWindowModality(2)  # 应用程序模态
+            progress.show()
+            
+            # 进度回调函数
+            def update_progress(value, message):
+                progress.setValue(value)
+                progress.setLabelText(message)
+                return not progress.wasCanceled()
+            
+            # 准备面片和顶点数据
+            vertices = np.array(self.mesh_data['vertices'])
+            faces = np.array(self.mesh_data['faces'])
+            
+            # 使用STAR-CCM+算法分析面片质量
+            results = analyze_face_quality(vertices, faces, threshold, update_progress)
+            
+            if results is None:  # 用户取消
+                progress.close()
+                return
+            
+            # 关闭进度对话框
+            progress.setValue(100)
+            
+            # 将低质量面片添加到选择中
             self.selected_faces = results['low_quality_faces']
             
-            # 更新网格显示
-            self.mesh.GetCellData().SetScalars(results['colors'])
+            # 显示质量报告
+            report = generate_quality_report(results['stats'])
+            print(report)  # 使用print输出报告
             
-            # 更新界面显示
+            # 显示结果信息在对话框中
+            QMessageBox.information(
+                self, 
+                "面片质量分析完成", 
+                f"分析完成，找到 {len(self.selected_faces)} 个低质量面片。\n\n{report}"
+            )
+            
+            # 更新显示（但不改变面片颜色）
             self.update_display()
             
-            # 生成并显示统计信息
-            quality_info = generate_quality_report(results['stats'])
-            QMessageBox.information(self, '面片质量分析', quality_info)
-            
             # 显示结果消息
-            self.statusBar.showMessage(f'已选中 {len(self.selected_faces)} 个质量低于 {threshold} 的面片')
+            self.statusBar.showMessage(f'找到 {len(self.selected_faces)} 个低质量面片')
             
             # 检查是否找到了质量问题面片
-            if len(self.selected_faces) > 0:
-                # 更新数字标签为实际数量
-                self.adjust_font_size(self.quality_count, str(len(self.selected_faces)))
-            else:
-                # 如果没有找到，显示为0
-                self.adjust_font_size(self.quality_count, "0")
+            if hasattr(self, 'quality_count'):
+                if len(self.selected_faces) > 0:
+                    # 更新数字标签为实际数量
+                    if hasattr(self, 'adjust_font_size'):
+                        self.adjust_font_size(self.quality_count, str(len(self.selected_faces)))
+                else:
+                    # 如果没有找到，显示为0
+                    if hasattr(self, 'adjust_font_size'):
+                        self.adjust_font_size(self.quality_count, "0")
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             QMessageBox.critical(self, "错误", f"面片质量分析失败: {str(e)}")
-        finally:
-            progress.close()
 
     def select_adjacent_faces(self):
         """

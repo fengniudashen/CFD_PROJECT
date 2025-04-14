@@ -3,6 +3,16 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 import struct
+import time
+import os
+
+# Assuming the compiled module is in the CFD directory
+try:
+    from CFD import mesh_reader_cpp
+except ImportError:
+    print("Error: Could not import the compiled mesh_reader_cpp module.")
+    print("Ensure 'mesh_reader_cpp.cp310-win_amd64.pyd' is inside the 'CFD' directory.")
+    exit(1)
 
 class MeshReader(ABC):
     """抽象基类，定义网格读取器的接口"""
@@ -123,36 +133,102 @@ class NastranReader(MeshReader):
         with open(file_path, 'r') as f:
             lines = f.readlines()
             
-        for line in lines:
-            if line.startswith('GRID'):
-                # GRID格式: GRID    ID     CP      X       Y       Z
-                parts = line[:-1].split()
-                node_id = int(parts[1])
-                x = float(parts[3])
-                y = float(parts[4])
-                z = float(parts[5])
-                nodes[node_id] = [x, y, z]
+        i = 0
+        while i < len(lines):
+            line_content = lines[i].strip()
+            
+            # 标准 GRID 格式
+            if line_content.startswith('GRID') and not line_content.startswith('GRID*'):
+                try:
+                    parts = line_content.split()
+                    if len(parts) < 6:
+                        i += 1
+                        continue
+                    node_id = int(parts[1])
+                    x_idx, y_idx, z_idx = 3, 4, 5 
+                    x = float(parts[x_idx]) 
+                    y = float(parts[y_idx])
+                    z = float(parts[z_idx])
+                    nodes[node_id] = [x, y, z]
+                except (IndexError, ValueError) as e:
+                    i += 1
+                    continue # Skip problematic line
+            
+            # GRID* 格式 (两行表示一个节点)
+            elif line_content.startswith('GRID*'):
+                try:
+                    if i + 1 < len(lines):  # 确保有下一行
+                        parts1 = line_content.split()
+                        next_line = lines[i+1].strip()
+                        
+                        if next_line.startswith('*'):  # 确认第二行以 * 开头
+                            parts2 = next_line.split()
+                            
+                            if len(parts1) < 5 or len(parts2) < 2:
+                                i += 2  # 跳过这两行
+                                continue
+                                
+                            node_id = int(parts1[1])
+                            x = float(parts1[3])
+                            y = float(parts1[4])
+                            z = float(parts2[1])
+                            
+                            nodes[node_id] = [x, y, z]
+                            i += 2  # 处理完这两行后，增加两次索引
+                            continue
+                except (IndexError, ValueError) as e:
+                    i += 2  # 处理出错，跳过这两行
+                    continue
                 
-            elif line.startswith('CTETRA') or line.startswith('CHEXA'):
-                # 读取四面体或六面体单元
-                parts = line[:-1].split()
-                element_type = parts[0]
-                element_nodes = [int(x) for x in parts[3:]]
-                elements.append(element_nodes)
-                element_types.append(element_type)
+            elif line_content.startswith('CTETRA') or line_content.startswith('CHEXA'):
+                try:
+                    parts = line_content.split()
+                    if len(parts) < 4:
+                         i += 1
+                         continue
+                    element_type = parts[0]
+                    element_nodes = [int(x) for x in parts[3:]]
+                    if not element_nodes:
+                        i += 1
+                        continue
+                    elements.append(element_nodes)
+                    element_types.append(element_type)
+                except (IndexError, ValueError) as e:
+                     i += 1
+                     continue # Skip problematic line
+            
+            # 如果没有任何条件匹配，增加索引继续处理下一行
+            i += 1
         
         # 转换为numpy数组并确保节点ID连续
+        if not nodes:
+            return {'nodes': np.array([]), 'elements': np.array([]), 'element_types': []}
+            
         node_ids = sorted(nodes.keys())
         id_map = {old_id: new_id for new_id, old_id in enumerate(node_ids)}
         nodes_array = np.array([nodes[nid] for nid in node_ids])
         
         # 重新映射单元中的节点ID
-        elements_array = [[id_map[nid] for nid in element] for element in elements]
-        
+        elements_array = []
+        valid_element_types = [] # Keep track of types for valid elements
+        for i, element in enumerate(elements):
+            try:
+                mapped_element = [id_map[nid] for nid in element]
+                elements_array.append(mapped_element)
+                valid_element_types.append(element_types[i]) # Add type if element is valid
+            except KeyError as e:
+                pass # Skip element
+
+        # Convert potentially jagged list to object array if elements have different node counts
+        try:
+            final_elements_array = np.array(elements_array)
+        except ValueError:
+            final_elements_array = np.array(elements_array, dtype=object)
+
         return {
             'nodes': nodes_array,
-            'elements': np.array(elements_array),
-            'element_types': element_types
+            'elements': final_elements_array,
+            'element_types': valid_element_types # Return types corresponding to valid elements
         }
 
 def create_mesh_reader(file_path: str) -> MeshReader:
@@ -165,4 +241,71 @@ def create_mesh_reader(file_path: str) -> MeshReader:
     elif ext == '.nas':
         return NastranReader()
     else:
-        raise ValueError(f"Unsupported file format: {ext}") 
+        raise ValueError(f"Unsupported file format: {ext}")
+
+def load_and_time_mesh(filepath):
+    """
+    Loads the mesh file using the C++ module and measures the time taken.
+
+    Args:
+        filepath (str): The path to the .nas file.
+
+    Returns:
+        The result from the load_mesh function (if any), or None if loading fails.
+    """
+    if not os.path.exists(filepath):
+        print(f"Error: Mesh file not found at '{filepath}'")
+        return None
+
+    print(f"Attempting to load mesh file: {filepath}")
+    start_time = time.perf_counter()
+
+    try:
+        # Call the correct function exposed by the C++ module
+        mesh_data = mesh_reader_cpp.read_nas_file(filepath)
+        end_time = time.perf_counter()
+        duration = end_time - start_time
+        print(f"Successfully loaded mesh in {duration:.4f} seconds.")
+        # Depending on what load_mesh returns, you might want to use mesh_data
+        # print(f"Loaded mesh data: {mesh_data}") # Example
+        return mesh_data
+    except AttributeError:
+        # Update the error message to reflect the function we tried
+        print("Error: The 'mesh_reader_cpp' module does not have a 'read_nas_file' function.")
+        print("Please check the available functions in the C++ module (src/mesh_reader_py.cpp).")
+        return None
+    except Exception as e:
+        end_time = time.perf_counter()
+        duration = end_time - start_time
+        print(f"Error loading mesh after {duration:.4f} seconds: {e}")
+        return None
+
+if __name__ == "__main__":
+    # Define the path to the LARGE mesh file
+    mesh_file_path = os.path.join("src", "data", "large_star.nas")
+
+    print(f"--- Loading LARGE file: {mesh_file_path} ---")
+    print("\n--- Loading with C++ Module ---")
+    load_and_time_mesh(mesh_file_path)
+
+    print("\n--- Loading with Python Module ---")
+    if not os.path.exists(mesh_file_path):
+        print(f"Error: Mesh file not found at '{mesh_file_path}'")
+    else:
+        print(f"Attempting to load mesh file: {mesh_file_path}")
+        start_time_py = time.perf_counter()
+        try:
+            # Use the pure Python reader
+            py_reader = create_mesh_reader(mesh_file_path)
+            mesh_data_py = py_reader.read(mesh_file_path)
+            end_time_py = time.perf_counter()
+            duration_py = end_time_py - start_time_py
+            print(f"Successfully loaded mesh in {duration_py:.4f} seconds.")
+            # You could optionally compare mesh_data_py with the C++ result
+            # if mesh_data is not None:
+            #     # Add comparison logic here if needed
+            #     pass
+        except Exception as e:
+            end_time_py = time.perf_counter()
+            duration_py = end_time_py - start_time_py
+            print(f"Error loading mesh with Python module after {duration_py:.4f} seconds: {e}") 
