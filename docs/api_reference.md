@@ -1,6 +1,6 @@
-# API参考文档 (C0.0.1)
+# API参考文档 (V0.0.8)
 
-本文档提供了CFD网格处理工具C0.0.1版本中核心函数的详细说明和使用方法。
+本文档提供了CFD网格处理工具V0.0.8版本中核心函数的详细说明和使用方法。
 
 ## 网格生成模块 (create_football_mesh.py)
 
@@ -63,6 +63,96 @@ vertices, faces, normals = create_football_mesh(radius=100.0, subdivisions=3)
 save_to_stl('data/football.stl', vertices, faces, normals)
 ```
 
+## 穿刺面检测模块 (pierced_faces_cpp)
+
+### `detect_pierced_faces_with_timing(faces, vertices)`
+
+使用高性能C++算法检测网格中的穿刺面（相交面），并返回检测时间。
+
+**参数**：
+- `faces (np.ndarray)`：面片索引数组，形状为(num_faces, 3)，数据类型为int
+- `vertices (np.ndarray)`：顶点坐标数组，形状为(num_vertices, 3)，数据类型为float或double
+
+**返回值**：
+- `Tuple[List[int], float]`：包含检测到的穿刺面索引列表和检测用时(秒)的元组
+
+**示例**：
+```python
+import pierced_faces_cpp
+pierced_faces, detection_time = pierced_faces_cpp.detect_pierced_faces_with_timing(faces, vertices)
+print(f"检测到{len(pierced_faces)}个穿刺面，用时{detection_time:.4f}秒")
+```
+
+### `detect_pierced_faces(faces, vertices)`
+
+使用高性能C++算法检测网格中的穿刺面（相交面），不返回检测时间。
+
+**参数**：
+- `faces (np.ndarray)`：面片索引数组，形状为(num_faces, 3)，数据类型为int
+- `vertices (np.ndarray)`：顶点坐标数组，形状为(num_vertices, 3)，数据类型为float或double
+
+**返回值**：
+- `List[int]`：检测到的穿刺面索引列表
+
+**示例**：
+```python
+import pierced_faces_cpp
+pierced_faces = pierced_faces_cpp.detect_pierced_faces(faces, vertices)
+print(f"检测到{len(pierced_faces)}个穿刺面")
+```
+
+## 算法性能对比模块 (example_compare_methods.py)
+
+### `create_intersecting_model(num_faces=1000)`
+
+创建一个包含穿刺面的测试模型。
+
+**参数**：
+- `num_faces (int, 可选)`：模型中的面片数量，默认为1000
+
+**返回值**：
+- `Tuple[np.ndarray, np.ndarray]`：包含顶点坐标和面片索引的元组
+
+**示例**：
+```python
+from src.example_compare_methods import create_intersecting_model
+vertices, faces = create_intersecting_model(num_faces=500)
+```
+
+### `detect_pierced_faces_python(faces, vertices)`
+
+使用Python算法检测网格中的穿刺面。
+
+**参数**：
+- `faces (np.ndarray)`：面片索引数组
+- `vertices (np.ndarray)`：顶点坐标数组
+
+**返回值**：
+- `Tuple[List[int], float]`：包含检测到的穿刺面索引列表和检测用时(秒)的元组
+
+**示例**：
+```python
+from src.example_compare_methods import detect_pierced_faces_python
+py_results, py_time = detect_pierced_faces_python(faces, vertices)
+```
+
+### `detect_pierced_faces_cpp(faces, vertices)`
+
+使用C++算法检测网格中的穿刺面，是对pierced_faces_cpp模块的封装。
+
+**参数**：
+- `faces (np.ndarray)`：面片索引数组
+- `vertices (np.ndarray)`：顶点坐标数组
+
+**返回值**：
+- `Tuple[List[int], float]`：包含检测到的穿刺面索引列表和检测用时(秒)的元组
+
+**示例**：
+```python
+from src.example_compare_methods import detect_pierced_faces_cpp
+cpp_results, cpp_time = detect_pierced_faces_cpp(faces, vertices)
+```
+
 ## 网格可视化模块 (mesh_viewer_qt.py)
 
 ### `MeshViewerQt`类
@@ -106,6 +196,32 @@ viewer.load_mesh({
     'vertices': new_vertices,
     'faces': new_faces
 })
+```
+
+### `detect_face_intersections()`
+
+使用高性能C++算法（如果可用）检测网格中的交叉面，并在界面中显示。
+
+**示例**：
+```python
+viewer = MeshViewerQt(mesh_data)
+viewer.detect_face_intersections()  # 检测并显示交叉面
+```
+
+### `check_triangle_intersection(tri1_verts, tri2_verts)`
+
+检测两个三角形是否相交的底层函数。
+
+**参数**：
+- `tri1_verts (np.ndarray)`：第一个三角形的三个顶点坐标，形状为(3, 3)
+- `tri2_verts (np.ndarray)`：第二个三角形的三个顶点坐标，形状为(3, 3)
+
+**返回值**：
+- `bool`：如果两个三角形相交则返回True，否则返回False
+
+**示例**：
+```python
+is_intersecting = viewer.check_triangle_intersection(triangle1_vertices, triangle2_vertices)
 ```
 
 ## 示例模块 (example_football.py)
