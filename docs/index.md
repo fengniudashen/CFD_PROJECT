@@ -4,7 +4,8 @@
 
 ## 最新版本信息
 
-- **稳定版本**：[V0.0.7](../CHANGELOG.md) - 2024-05-10发布
+- **最新版本**：[V0.0.9](../CHANGELOG.md) - 2024-06-16发布
+- **稳定版本**：[V0.0.8](../CHANGELOG.md) - 2024-05-26发布
 - **开发版本**：[C0.0.1](release_notes_C0.0.1.md) - 开发中
 
 ## C0.0.1版本文档
@@ -82,8 +83,9 @@ sys.exit(app.exec_())
 ## 版本历史
 
 - [C0.0.1](release_notes_C0.0.1.md)：当前开发分支版本
-- [V0.0.7](../CHANGELOG.md)：当前稳定版本
-- [V0.0.6](../CHANGELOG.md)：历史版本
+- [V0.0.9](release_notes_V0.0.9.md)：当前最新版本
+- [V0.0.8](../CHANGELOG.md)：稳定版本
+- [V0.0.7](../CHANGELOG.md)：历史版本
 - [更多版本](../CHANGELOG.md)：完整版本历史
 
 ## 联系方式
