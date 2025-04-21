@@ -30,7 +30,9 @@ build/
 
 # Project specific
 data/*.stl
-data/*.nas
+# data/*.nas # Keep this commented or remove if you want to track *some* .nas in data/
+src/data/*.nas
+output/*.nas
 
 # OS specific
 .DS_Store

@@ -3,8 +3,8 @@ import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QPushButton, QFrame, QLabel, QLineEdit,
                            QGridLayout, QMessageBox, QStatusBar, QProgressDialog, QInputDialog,
-                           QTabWidget, QShortcut, QMenu, QAction)
-from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QColor, QPixmap, QImage, qRgb
+                           QTabWidget, QShortcut, QMenu, QAction, QRadioButton, QCheckBox)
+from PyQt5.QtGui import QFont, QIcon, QPainter, QPen, QColor, QPixmap, QImage, qRgb, QCursor
 from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -17,6 +17,23 @@ from PyQt5.QtGui import QKeySequence
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import traceback
+
+# 导入算法包中的所有算法
+from algorithms import (
+    BaseAlgorithm, AlgorithmUtils, FreeEdgesAlgorithm, OverlappingEdgesAlgorithm,
+    FaceQualityAlgorithm, CombinedIntersectionAlgorithm, MergedVertexDetectionAlgorithm
+)
+
+try:
+    import non_manifold_vertices_cpp
+    HAS_NON_MANIFOLD_VERTICES_CPP = True
+    print("已加载非流形顶点检测C++模块")
+except ImportError:
+    HAS_NON_MANIFOLD_VERTICES_CPP = False
+    print("未找到非流形顶点检测C++模块，将使用Python实现")
+
+# 添加导入model_change_tracker模块
+from model_change_tracker import ModelChangeTracker
 
 class StatusIndicator(QFrame):
     def __init__(self, title, parent=None):
@@ -58,13 +75,30 @@ class StatusIndicator(QFrame):
 
 class MeshViewerQt(QMainWindow):
     def __init__(self, mesh_data: Dict):
+        """初始化Qt Mesh Viewer"""
         super().__init__()
+        
+        # 初始化成员变量
         self.mesh_data = mesh_data
-        self.selected_faces = []
         self.selected_points = []
         self.selected_edges = []
+        self.selected_faces = []
         self.temp_points = []
-        self.selection_mode = 'point'
+        self.selection_mode = 'smart'
+        
+        # 面相交关系映射 - 储存每个面与哪些面相交
+        self.face_intersection_map = {}
+        
+        # 添加切换按钮的初始化
+        self.toggle_buttons = []
+        self.toggle_states = [False] * 6  # 存储6个切换按钮的状态
+        
+        # 添加导航按钮的初始化
+        self.nav_buttons = []
+        
+        # 添加新功能按钮的初始化
+        self.function_buttons = []
+        self.function_button_states = [False, False]  # 记录两个按钮的状态
         
         # 添加拖动状态跟踪
         self.left_button_down = False
@@ -91,6 +125,22 @@ class MeshViewerQt(QMainWindow):
         # 性能模式切换
         self.high_performance_mode = True  # 默认使用高性能模式
         
+        # 添加检测按钮缓存结果字典
+        self.detection_cache = {
+            'face_intersections': None,  # 交叉面
+            'face_intersection_map': None,  # 交叉面关系映射
+            'face_quality': None,        # 面质量 
+            'adjacent_faces': None,      # 相邻面
+            'free_edges': None,          # 自由边
+            'overlapping_edges': None,   # 重叠边
+            'overlapping_points': None   # 重叠点
+        }
+        # 用于追踪模型是否发生变化的标记
+        self.model_modified = False
+        
+        # 初始化模型变更追踪器
+        self.model_tracker = ModelChangeTracker(self)
+        
         # 创建 VTK 小部件
         self.vtk_widget = QVTKRenderWindowInteractor()
         
@@ -110,7 +160,85 @@ class MeshViewerQt(QMainWindow):
         # 创建底部状态栏用于显示选择信息
         self.statusBar = self.statusBar()
         
+        # 存储视图
+        self.views = {}  # 存储的视图
+        self.view_counter = 0  # 视图计数器
+        
+        # 检查C++扩展模块是否可用
+        self.has_cpp_extensions = self.check_cpp_extensions()
+        
+        # 初始化UI
         self.initUI()
+        
+        # 显示状态栏信息
+        if not self.has_cpp_extensions:
+            self.statusBar.showMessage("提示: 安装C++模块可显著提高性能")
+        
+        # 缓存和标志
+        self.cached_mesh = None
+        self.needs_high_res_render = False
+        self.is_interacting = False
+        self.is_large_model = len(mesh_data['vertices']) > 5000
+        
+        # 初始化选中和状态
+        self.selection_mode = 'smart'
+        self.selected_points = []
+        self.selected_edges = []
+        self.selected_faces = []
+        self.edge_selection_source = 'manual'  # 新增边选择来源标志: 'manual' 表示手动选择，'auto' 表示按钮自动选择
+    
+    def check_cpp_extensions(self):
+        """检查C++扩展模块是否可用"""
+        cpp_modules_available = True
+        
+        # 检查各个C++扩展模块
+        try:
+            import self_intersection_cpp
+            print("已加载 self_intersection_cpp 模块")
+        except ImportError:
+            cpp_modules_available = False
+            print("未找到 self_intersection_cpp 模块")
+            
+        try:
+            import pierced_faces_cpp
+            # 检查是否为新版模块(支持相交映射)
+            try:
+                # 使用一个极小的测试网格测试新功能
+                test_verts = np.array([[0,0,0],[1,0,0],[0,1,0]], dtype=np.float64)
+                test_faces = np.array([[0,1,2]], dtype=np.int32)
+                _, test_map, _ = pierced_faces_cpp.detect_pierced_faces_with_timing(test_faces, test_verts)
+                print("已加载增强版 pierced_faces_cpp 模块 (支持相交映射)")
+                self.has_enhanced_pierced_faces = True
+            except ValueError:
+                print("已加载基础版 pierced_faces_cpp 模块 (不支持相交映射)")
+                self.has_enhanced_pierced_faces = False
+        except ImportError:
+            cpp_modules_available = False
+            self.has_enhanced_pierced_faces = False
+            print("未找到 pierced_faces_cpp 模块")
+            
+        try:
+            import non_manifold_vertices_cpp
+            print("已加载 non_manifold_vertices_cpp 模块")
+        except ImportError:
+            cpp_modules_available = False
+            print("未找到 non_manifold_vertices_cpp 模块")
+            
+        try:
+            import overlapping_points_cpp
+            print("已加载 overlapping_points_cpp 模块")
+        except ImportError:
+            cpp_modules_available = False
+            # 静默失败，不打印信息
+            
+        try:
+            import face_quality_cpp
+            print("已加载 face_quality_cpp 模块")
+        except ImportError:
+            cpp_modules_available = False
+            print("未找到 face_quality_cpp 模块")
+        
+        return cpp_modules_available
     
     def initUI(self):
         """初始化UI"""
@@ -431,14 +559,39 @@ class MeshViewerQt(QMainWindow):
         vtk_frame_layout.setContentsMargins(0, 0, 0, 0)
         vtk_frame_layout.addWidget(self.vtk_widget)
         
-        # 创建Face intersection按钮图标
-        intersection_icon = QIcon('src/icons/face_intersection.svg')
+        # 创建Face intersection按钮图标（程序化绘制，替换SVG文件）
+        intersection_icon = QIcon()
+        intersection_pixmap = QPixmap(32, 32)
+        intersection_pixmap.fill(Qt.transparent)
+        intersection_painter = QPainter(intersection_pixmap)
+        intersection_painter.setRenderHint(QPainter.Antialiasing)
+        intersection_pen = QPen(QColor(255, 0, 0))
+        intersection_pen.setWidth(2)
+        intersection_painter.setPen(intersection_pen)
+        # 绘制两条相交的线
+        intersection_painter.drawLine(8, 8, 24, 24)  # 从左上到右下的线
+        intersection_painter.drawLine(24, 8, 8, 24)  # 从右上到左下的线
+        intersection_painter.end()
+        intersection_icon.addPixmap(intersection_pixmap)
         
-        # 创建快速交叉面按钮图标（复用交叉面图标）
-        fast_intersection_icon = QIcon('src/icons/face_intersection.svg')
+        # 复用交叉面图标
+        fast_intersection_icon = intersection_icon
 
-        # 创建Face quality按钮图标
-        quality_icon = QIcon('src/icons/face_quality.svg')
+        # 创建Face quality按钮图标（程序化绘制，替换SVG文件）
+        quality_icon = QIcon()
+        quality_pixmap = QPixmap(32, 32)
+        quality_pixmap.fill(Qt.transparent)
+        quality_painter = QPainter(quality_pixmap)
+        quality_painter.setRenderHint(QPainter.Antialiasing)
+        quality_pen = QPen(QColor(0, 128, 255))
+        quality_pen.setWidth(2)
+        quality_painter.setPen(quality_pen)
+        # 绘制一个三角形
+        quality_painter.drawLine(16, 8, 8, 24)   # 左边线
+        quality_painter.drawLine(16, 8, 24, 24)  # 右边线
+        quality_painter.drawLine(8, 24, 24, 24)  # 底边线
+        quality_painter.end()
+        quality_icon.addPixmap(quality_pixmap)
 
         # 创建Face proximity按钮图标
         prox_icon = QIcon()
@@ -676,7 +829,7 @@ class MeshViewerQt(QMainWindow):
         total_right_buttons = 6  # 右侧按钮总数
         right_start_y = int(vtk_frame.height() / 2) - ((total_right_buttons * button_height) // 2)  # 让按钮组居中
         
-        # 创建右侧按钮的数字标签
+        # 创建右侧六个按钮的标签位置
         self.intersection_count = QLabel("未分析", vtk_frame)
         self.quality_count = QLabel("未分析", vtk_frame)
         self.proximity_count = QLabel("未分析", vtk_frame)
@@ -784,8 +937,28 @@ class MeshViewerQt(QMainWindow):
         for i, btn in enumerate(top_btns):
             btn.move(start_x + i * 30, 10)  # 顶部位置，水平排列
         
+        # 创建性能模式切换按钮
+        perf_mode_btn = QPushButton('切换性能模式')
+        perf_mode_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #e0e0e0;
+                color: #333333;
+                border: 1px solid #999999;
+                border-radius: 4px;
+                padding: 2px;
+            }
+            QPushButton:hover {
+                background-color: #d0d0d0;
+                border-color: #666666;
+            }
+        """)
+        perf_mode_btn.clicked.connect(self.toggle_performance_mode)
+        perf_mode_btn.setFixedSize(120, 30)
+        perf_mode_btn.setParent(vtk_frame)
+        perf_mode_btn.move(20, 20)  # 位于左上角
+        
         # 当VTK窗口大小改变时，更新按钮位置
-        def update_button_positions(event):
+        def update_button_positions(event=None):
             # 更新右侧按钮位置，紧挨在一起没有缝隙
             button_height = 30  # 按钮高度
             total_right_buttons = 6  # 右侧按钮总数
@@ -810,7 +983,12 @@ class MeshViewerQt(QMainWindow):
             overlap_point_btn.move(vtk_frame.width() - 130, right_start_y + button_height * 5)
             self.overlap_point_count.move(vtk_frame.width() - 50, right_start_y + button_height * 5)
             
-            perf_mode_btn.move(20, 20)  # 保持在左上角
+            # 更新切换按钮位置 - 放在右侧按钮的左侧
+            for i, btn in enumerate(self.toggle_buttons):
+                btn.move(vtk_frame.width() - 150, right_start_y + button_height * i)
+            
+            # 保持性能模式按钮在左上角
+            perf_mode_btn.move(20, 20)
             
             # 更新左侧9个按钮位置
             for i, btn in enumerate(left_btns):
@@ -821,8 +999,39 @@ class MeshViewerQt(QMainWindow):
             start_x = (vtk_frame.width() - total_width) // 2  # 重新计算起始位置
             for i, btn in enumerate(top_btns):
                 btn.move(start_x + i * 30, 10)
+            
+            # 更新导航按钮位置（四个新增的按钮）
+            nav_btn_y = right_start_y + button_height * 6  # 位于六个按钮下方，紧挨着
+            
+            # 左对齐与打勾框（toggle按钮）
+            nav_left = vtk_frame.width() - 150  # 与toggle按钮左侧对齐
+            
+            # 右对齐与数字框（count标签）
+            nav_right = vtk_frame.width()  # 数字框右边界
+            
+            # 计算四个按钮的总宽度
+            nav_total_width = nav_right - nav_left  # 从toggle按钮左侧到count标签右侧的总宽度
+            
+            # 计算每个导航按钮的宽度
+            nav_btn_width = nav_total_width // 4
+            
+            # 放置导航按钮
+            for i, btn in enumerate(self.nav_buttons):
+                btn.setFixedSize(nav_btn_width, 30)  # 更新按钮大小
+                btn.move(nav_left + i * nav_btn_width, nav_btn_y)
+                
+            # 更新功能按钮位置（两个功能按钮，位于导航按钮下方）
+            func_btn_width = nav_total_width  # 按钮宽度为导航按钮的总宽度
+            func_btn_y_start = nav_btn_y + button_height  # 导航按钮下方，紧挨着
+            
+            for i, btn in enumerate(self.function_buttons):
+                btn.setFixedSize(func_btn_width, 30)  # 更新按钮大小
+                btn.move(nav_left, func_btn_y_start + i * button_height)  # 垂直排列，紧挨着
         
         vtk_frame.resizeEvent = update_button_positions
+        
+        # 初始调用一次更新按钮位置，设置初始状态
+        update_button_positions()
         
         # 将水平布局添加到右侧容器
         right_layout.addLayout(vtk_container, stretch=1)
@@ -957,34 +1166,14 @@ class MeshViewerQt(QMainWindow):
         self.add_orientation_marker()
         
         # 初始化选择模式
-        self.selection_mode = 'point'
-        self.selected_points = []  # 改用列表存储所有选中的点
+        self.selection_mode = 'smart'
+        self.selected_points = []
         self.selected_edges = []
         self.selected_faces = []
         self.temp_points = []  # 仅用于创建面的临时点
         
         # 添加快捷键
         self.setFocusPolicy(Qt.StrongFocus)
-        
-        # 创建性能模式切换按钮
-        perf_mode_btn = QPushButton('切换性能模式')
-        perf_mode_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #e0e0e0;
-                color: #333333;
-                border: 1px solid #999999;
-                border-radius: 4px;
-                padding: 2px;
-            }
-            QPushButton:hover {
-                background-color: #d0d0d0;
-                border-color: #666666;
-            }
-        """)
-        perf_mode_btn.clicked.connect(self.toggle_performance_mode)
-        perf_mode_btn.setFixedSize(120, 30)
-        perf_mode_btn.setParent(vtk_frame)
-        perf_mode_btn.move(20, 20)  # 位于左上角
         
         # 添加快捷键
         self.shortcut_delete = QShortcut(QKeySequence(Qt.Key_D), self)
@@ -995,6 +1184,150 @@ class MeshViewerQt(QMainWindow):
         
         self.shortcut_axes = QShortcut(QKeySequence(Qt.Key_A), self)
         self.shortcut_axes.activated.connect(self.toggle_axes_visibility)
+    
+        # 创建6个小的切换按钮 - 放在右侧按钮左侧
+        self.toggle_buttons = []
+        for i in range(6):
+            toggle_btn = QPushButton("", vtk_frame)
+            toggle_btn.setFixedSize(20, 30)  # 小按钮，高度与右侧按钮一致
+            toggle_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f0f0f0;
+                    color: #333333;
+                    border: 1px solid #999999;
+                    border-radius: 4px;
+                    padding: 0px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #e0e0e0;
+                    border-color: #666666;
+                }
+            """)
+            # 使用lambda创建闭包，确保每个按钮能获取正确的索引
+            toggle_btn.clicked.connect(lambda checked, idx=i: self.toggle_checkbox(idx))
+            self.toggle_buttons.append(toggle_btn)
+            toggle_btn.setParent(vtk_frame)
+        
+        # 创建四个导航按钮（第一个、上一个、下一个、最后一个）
+        self.nav_buttons = []
+        nav_btn_names = ["首个", "上一个", "下一个", "末个"]
+        
+        for i in range(4):
+            nav_btn = QPushButton("", vtk_frame)
+            # 不在这里设置固定大小，由update_button_positions动态设置
+            # nav_btn.setFixedSize(40, 30)  # 设置按钮大小
+            
+            # 设置导航按钮基本样式
+            nav_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f0f0f0;
+                    color: #333333;
+                    border: 1px solid #999999;
+                    border-radius: 4px;
+                    padding: 2px;
+                }
+                QPushButton:hover {
+                    background-color: #e0e0e0;
+                    border-color: #666666;
+                }
+                QPushButton:pressed {
+                    background-color: #c0c0c0;
+                    border-color: #555555;
+                }
+            """)
+            
+            # 创建按钮图标
+            icon_pixmap = QPixmap(32, 32)
+            icon_pixmap.fill(Qt.transparent)
+            painter = QPainter(icon_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            pen = QPen(QColor(0, 0, 0))
+            pen.setWidth(2)
+            painter.setPen(pen)
+            
+            # 根据按钮类型绘制不同图标
+            if i == 0:  # 第一个按钮 - 向左双箭头带竖线
+                # 竖线
+                painter.drawLine(8, 8, 8, 24)
+                # 第一个左箭头箭身
+                painter.drawLine(16, 16, 8, 16)
+                # 第一个左箭头箭头
+                painter.drawLine(12, 12, 8, 16)
+                painter.drawLine(12, 20, 8, 16)
+                # 第二个左箭头箭身
+                painter.drawLine(24, 16, 16, 16)
+                # 第二个左箭头箭头
+                painter.drawLine(20, 12, 16, 16)
+                painter.drawLine(20, 20, 16, 16)
+            elif i == 1:  # 上一个按钮 - 向左箭头
+                # 画左箭头
+                painter.drawLine(20, 16, 12, 16)
+                painter.drawLine(16, 12, 12, 16)
+                painter.drawLine(16, 20, 12, 16)
+            elif i == 2:  # 下一个按钮 - 向右箭头
+                # 画右箭头
+                painter.drawLine(12, 16, 20, 16)
+                painter.drawLine(16, 12, 20, 16)
+                painter.drawLine(16, 20, 20, 16)
+            elif i == 3:  # 最后一个按钮 - 向右双箭头带竖线
+                # 竖线
+                painter.drawLine(24, 8, 24, 24)
+                # 第一个右箭头箭身
+                painter.drawLine(8, 16, 16, 16)
+                # 第一个右箭头箭头
+                painter.drawLine(12, 12, 16, 16)
+                painter.drawLine(12, 20, 16, 16)
+                # 第二个右箭头箭身
+                painter.drawLine(16, 16, 24, 16)
+                # 第二个右箭头箭头
+                painter.drawLine(20, 12, 24, 16)
+                painter.drawLine(20, 20, 24, 16)
+            
+            painter.end()
+            
+            # 设置图标
+            btn_icon = QIcon()
+            btn_icon.addPixmap(icon_pixmap)
+            nav_btn.setIcon(btn_icon)
+            nav_btn.setIconSize(QSize(24, 24))
+            
+            # 设置提示文本
+            nav_btn.setToolTip(nav_btn_names[i])
+            
+            # 添加点击事件处理
+            nav_btn.clicked.connect(lambda checked, idx=i: self.handle_nav_button(idx))
+            
+            self.nav_buttons.append(nav_btn)
+            nav_btn.setParent(vtk_frame)
+            
+        # 创建两个功能按钮
+        self.function_buttons = []
+        function_btn_names = ["Reset View", "Rest Displayed"]
+        
+        for i in range(2):
+            func_btn = QPushButton(function_btn_names[i], vtk_frame)
+            
+            # 设置按钮基本样式（灰色，未激活状态）
+            func_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f0f0f0;  /* 浅灰色 */
+                    color: #333333;  /* 深灰色文字 */
+                    border: 1px solid #999999;  /* 灰色边框 */
+                    border-radius: 4px;
+                    padding: 2px;
+                }
+                QPushButton:hover {
+                    background-color: #e0e0e0;  /* 稍深灰色悬停 */
+                    border-color: #666666;
+                }
+            """)
+            
+            # 添加点击事件处理
+            func_btn.clicked.connect(lambda checked, idx=i: self.toggle_function_button(idx))
+            
+            self.function_buttons.append(func_btn)
+            func_btn.setParent(vtk_frame)
     
     def add_orientation_marker(self):
         """添加随视角变化的坐标轴方向指示器"""
@@ -1055,31 +1388,8 @@ class MeshViewerQt(QMainWindow):
         # 启用方向指示器但禁用拖动交互
         self.orientation_marker.InteractiveOff()
         
-        # 配置属性
-        # 创建一个立方体作为背景 - 可选，提供更好的视觉效果
-        cube = vtk.vtkCubeSource()
-        cube.SetXLength(1.5)
-        cube.SetYLength(1.5)
-        cube.SetZLength(1.5)
-        cube.Update()
-        
-        cube_mapper = vtk.vtkPolyDataMapper()
-        cube_mapper.SetInputData(cube.GetOutput())
-        
-        cube_actor = vtk.vtkActor()
-        cube_actor.SetMapper(cube_mapper)
-        
-        # 设置背景颜色为半透明浅灰色
-        cube_actor.GetProperty().SetColor(0.9, 0.9, 0.9)
-        cube_actor.GetProperty().SetOpacity(0.3)
-        
-        # 将立方体和坐标轴添加到方向指示器
-        assembly = vtk.vtkPropAssembly()
-        assembly.AddPart(cube_actor)
-        assembly.AddPart(axes)
-        
-        # 最后更新方向指示器
-        self.orientation_marker.SetOrientationMarker(assembly)
+        # 直接将坐标轴设置为指示器内容 (确保这行存在且有效)
+        self.orientation_marker.SetOrientationMarker(axes)
     
     def set_selection_mode(self, mode):
         """设置选择模式"""
@@ -1112,13 +1422,10 @@ class MeshViewerQt(QMainWindow):
     
     def on_left_button_press(self, obj, event):
         """处理鼠标左键按下事件"""
+        # 记录按下状态
         self.left_button_down = True
         self.moved_since_press = False
         self.press_pos = self.iren.GetEventPosition()
-        
-        # 性能优化：交互时降低渲染质量
-        self.is_interacting = True
-        self.vtk_widget.GetRenderWindow().SetDesiredUpdateRate(30.0)
         
         # 允许 VTK 继续处理事件
         self.iren.GetInteractorStyle().OnLeftButtonDown()
@@ -1169,6 +1476,47 @@ class MeshViewerQt(QMainWindow):
         
         # 检查是否点击到任何对象
         hit_anything = False
+        
+        # 检查是否按住右键 - 显示上下文菜单
+        # 首先检查event是否是有效的VTK事件对象(具有GetModifiers方法)
+        has_right_button_modifier = False
+        try:
+            if hasattr(event, 'GetModifiers'):
+                has_right_button_modifier = event.GetModifiers() & vtk.vtkRenderWindowInteractor.RightButtonModifier
+        except (AttributeError, TypeError):
+            pass  # 如果event不是预期的VTK事件对象，则跳过
+            
+        if has_right_button_modifier and cell_id != -1:
+            # 创建右键菜单
+            context_menu = QMenu(self)
+            
+            # 根据当前选择模式添加菜单项
+            if self.selection_mode == 'face':
+                if cell_id in self.selected_faces:
+                    remove_action = context_menu.addAction("取消选择此面")
+                    remove_action.triggered.connect(lambda: self.toggle_face_selection(cell_id))
+                else:
+                    add_action = context_menu.addAction("选择此面")
+                    add_action.triggered.connect(lambda: self.toggle_face_selection(cell_id))
+                
+                # 如果面相交关系映射存在数据
+                if hasattr(self, 'face_intersection_map') and self.face_intersection_map:
+                    # 如果当前面在相交映射中
+                    if cell_id in self.face_intersection_map and self.face_intersection_map[cell_id]:
+                        show_intersections = context_menu.addAction(f"显示此面的相交关系 ({len(self.face_intersection_map[cell_id])}个)")
+                        show_intersections.triggered.connect(lambda: self.show_face_intersections(cell_id))
+            
+            # 添加删除选项
+            context_menu.addSeparator()
+            if self.selection_mode == 'face':
+                delete_action = context_menu.addAction("删除此面")
+                delete_action.triggered.connect(lambda: self.delete_face(cell_id))
+            
+            # 在点击位置显示上下文菜单
+            global_pos = QCursor.pos()
+            context_menu.exec_(global_pos)
+            hit_anything = True
+            return
         
         # 1. 首先检查是否点击到点（最高优先级）
         min_dist = float('inf')
@@ -1232,6 +1580,7 @@ class MeshViewerQt(QMainWindow):
                         self.selected_edges.remove(closest_edge)
                     else:
                         self.selected_edges.append(closest_edge)
+                    self.edge_selection_source = 'manual'  # 设置为手动选择
                     self.statusBar.showMessage(f'选中边: {closest_edge[0]}-{closest_edge[1]}')
                     self.update_display()
                     return  # 如果选中了边，直接返回，不处理面
@@ -1275,6 +1624,11 @@ class MeshViewerQt(QMainWindow):
             print(f"创建点: ({x}, {y}, {z})")
             self.statusBar.showMessage(f'创建新点: X={x:.3f}, Y={y:.3f}, Z={z:.3f}')
             self.update_display()
+            
+            # 标记模型已经修改，并追踪新点ID
+            self.mark_model_modified()
+            if hasattr(self, 'model_tracker'):
+                self.model_tracker.track_modification('points', [new_point_id])
             
             # 由于模型已改变，重新进行检测
             self.update_model_analysis()
@@ -1487,7 +1841,11 @@ class MeshViewerQt(QMainWindow):
             
             edge_actor = vtk.vtkActor()
             edge_actor.SetMapper(edge_mapper)
-            edge_actor.GetProperty().SetColor(0.0, 1.0, 0.0)  # 绿色
+            # 根据边选择来源决定颜色
+            if hasattr(self, 'edge_selection_source') and self.edge_selection_source == 'auto':
+                edge_actor.GetProperty().SetColor(0.0, 1.0, 0.0)  # 自动选择的边为绿色
+            else:
+                edge_actor.GetProperty().SetColor(1.0, 0.0, 0.0)  # 手动选择的边为红色
             edge_actor.GetProperty().SetLineWidth(3.0)
             
             # 大模型时不使用线条管道渲染以提高性能
@@ -1508,75 +1866,101 @@ class MeshViewerQt(QMainWindow):
         points_to_display = []
         
         # 选择性显示点
-        if (total_points <= point_threshold or self.selected_points) and not self.is_interacting:
+        if total_points <= point_threshold or self.selected_points: # 移除 'and not self.is_interacting' 以允许交互时显示选中点
             # 交互过程中不显示太多点，除非特别选中了点
             if self.is_interacting and not self.selected_points:
-                # 交互时减少显示的点
+                # 交互时如果没有选中的点，则不显示任何点以提高性能
                 pass
-            elif total_points <= point_threshold:
+            else: # 执行渲染逻辑（如果非交互，或者交互中但有选中点）
                 # 如果点数少于阈值，显示所有点
-                for i, point in enumerate(self.mesh_data['vertices']):
-                    is_selected = i in self.selected_points
-                    points_to_display.append((i, is_selected))
-            else:
-                # 否则只显示选中的点
-                for i in self.selected_points:
-                    points_to_display.append((i, True))
-            
-            if points_to_display:
-                # 创建点的VTK表示
-                pts = vtk.vtkPoints()
-                vertex_data = vtk.vtkPolyData()
-                colors = vtk.vtkUnsignedCharArray()
-                colors.SetNumberOfComponents(3)
-                colors.SetName("Colors")
-                
-                for idx, (i, is_selected) in enumerate(points_to_display):
-                    pts.InsertNextPoint(self.mesh_data['vertices'][i])
-                    if is_selected:
-                        colors.InsertNextTuple3(255, 0, 0)  # 红色
-                    else:
-                        colors.InsertNextTuple3(77, 77, 77)  # 深灰色
-                
-                vertex_data.SetPoints(pts)
-                
-                # 创建或获取点的Glyph源
-                point_source = self.create_point_glyph_source()
-                
-                # 使用Glyph3D为每个点创建一个球体
-                glyph = vtk.vtkGlyph3D()
-                glyph.SetSourceData(point_source)
-                glyph.SetInputData(vertex_data)
-                glyph.ScalingOff()
-                
-                # 大型模型额外优化
-                if self.is_large_model:
-                    if hasattr(glyph, 'SetColorModeToColorByScalar'):
-                        glyph.SetColorModeToColorByScalar()
-                
-                glyph.Update()
-                
-                # 为每个点着色
-                glyph_data = glyph.GetOutput()
-                glyph_data.GetPointData().SetScalars(colors)
-                
-                # 创建mapper和actor
-                glyph_mapper = vtk.vtkPolyDataMapper()
-                glyph_mapper.SetInputData(glyph_data)
-                # glyph_mapper.SetImmediateModeRendering(0)  # 移除不兼容的方法调用
-                
-                glyph_actor = vtk.vtkActor()
-                glyph_actor.SetMapper(glyph_mapper)
-                glyph_actor.GetProperty().SetAmbient(1.0)
-                glyph_actor.GetProperty().SetDiffuse(0.0)
-                glyph_actor.GetProperty().SetSpecular(0.0)
-                
-                # 大型模型优化点的渲染属性
-                if self.is_large_model:
-                    glyph_actor.GetProperty().SetRepresentationToPoints()
-                    glyph_actor.GetProperty().SetPointSize(3)
-                
-                self.renderer.AddActor(glyph_actor)
+                if total_points <= point_threshold:
+                    for i, point in enumerate(self.mesh_data['vertices']):
+                        is_selected = i in self.selected_points
+                        points_to_display.append((i, is_selected))
+                else:
+                    # 否则只显示选中的点
+                    for i in self.selected_points:
+                        points_to_display.append((i, True))
+
+                if points_to_display:
+                    # 创建点的VTK表示
+                    pts = vtk.vtkPoints()
+                    vertex_data = vtk.vtkPolyData()
+                    
+                    # 创建颜色标量数组
+                    colors = vtk.vtkUnsignedCharArray()
+                    colors.SetNumberOfComponents(3)
+                    colors.SetName("Colors")
+                    
+                    # 创建大小标量数组 - 用于控制点的大小
+                    sizes = vtk.vtkFloatArray()
+                    sizes.SetNumberOfComponents(1)
+                    sizes.SetName("Sizes")
+
+                    for idx, (i, is_selected) in enumerate(points_to_display):
+                        pts.InsertNextPoint(self.mesh_data['vertices'][i])
+                        if is_selected:
+                            colors.InsertNextTuple3(255, 0, 0)  # 红色
+                            sizes.InsertNextValue(1.5)  # 选中的点放大 1.5 倍
+                        else:
+                            colors.InsertNextTuple3(77, 77, 77)  # 深灰色
+                            sizes.InsertNextValue(1.0)  # 未选中的点保持原始大小
+
+                    vertex_data.SetPoints(pts)
+                    # 将颜色和大小标量关联到 *输入* 点数据
+                    vertex_data.GetPointData().SetScalars(colors)
+                    vertex_data.GetPointData().AddArray(sizes)
+
+                    # 创建或获取点的Glyph源
+                    point_source = self.create_point_glyph_source()
+
+                    # 使用Glyph3D为每个点创建一个球体
+                    glyph = vtk.vtkGlyph3D()
+                    glyph.SetSourceData(point_source)
+                    glyph.SetInputData(vertex_data)
+                    # glyph.ScalingOff() # 移除禁用缩放的设置
+                    
+                    # 配置 Glyph3D 使用输入标量进行着色和缩放
+                    glyph.SetColorModeToColorByScalar()
+                    # 启用基于标量的缩放
+                    glyph.SetScaleModeToScaleByScalar()
+                    glyph.SetScaleFactor(1.0)  # 基础缩放因子
+                    # 指定用哪个数组控制缩放
+                    glyph.SetInputArrayToProcess(0, 0, 0, vtk.vtkDataObject.FIELD_ASSOCIATION_POINTS, "Sizes")
+
+                    # 大型模型额外优化 - 移除可能冲突的设置
+                    # if self.is_large_model:
+                    #     if hasattr(glyph, 'SetColorModeToColorByScalar'):
+                    #         glyph.SetColorModeToColorByScalar() # <--- 注释掉
+
+                    glyph.Update()
+
+                    # 为每个点着色 - 这行不再需要，颜色已在 Glyph3D 内部处理
+                    glyph_data = glyph.GetOutput()
+                    # glyph_data.GetPointData().SetScalars(colors) # <--- 移除或注释掉
+
+                    # 创建mapper和actor
+                    glyph_mapper = vtk.vtkPolyDataMapper()
+                    glyph_mapper.SetInputData(glyph_data)
+                    # 设置 Mapper 直接使用顶点标量作为颜色，不再通过 LUT 映射
+                    glyph_mapper.SetScalarModeToUsePointData()
+                    # glyph_mapper.SetColorModeToMapScalars()    # <--- 移除或注释掉，不再需要 LUT 映射
+                    glyph_mapper.ScalarVisibilityOn()         # 确保标量可见性开启
+                    # glyph_mapper.ScalarVisibilityOff()         # <--- 移除或注释掉这行，因为它与 ScalarVisibilityOn 冲突
+                    # glyph_mapper.SetImmediateModeRendering(0)  # 移除不兼容的方法调用
+
+                    glyph_actor = vtk.vtkActor()
+                    glyph_actor.SetMapper(glyph_mapper)
+                    glyph_actor.GetProperty().SetAmbient(1.0)
+                    glyph_actor.GetProperty().SetDiffuse(0.0)
+                    glyph_actor.GetProperty().SetSpecular(0.0)
+
+                    # 大型模型优化点的渲染属性 - 移除强制渲染为点
+                    if self.is_large_model:
+                        # glyph_actor.GetProperty().SetRepresentationToPoints() # <--- 注释掉
+                        glyph_actor.GetProperty().SetPointSize(3) # 保留点大小设置，以防万一
+
+                    self.renderer.AddActor(glyph_actor)
         
         # 更新状态计数
         self.update_status_counts()
@@ -1617,16 +2001,23 @@ class MeshViewerQt(QMainWindow):
     def delete_selected_faces(self):
         """删除选中的面"""
         if not self.selected_faces:
-            print("没有选中的面可删除")
+            QMessageBox.warning(self, '删除面', '请先选择要删除的面')
             return
+            
+        # 记录将要删除的面ID用于追踪
+        deleted_face_ids = self.selected_faces.copy()
         
+        # 创建一个布尔掩码，初始设置为全True
         mask = np.ones(len(self.mesh_data['faces']), dtype=bool)
-        mask[self.selected_faces] = False
         
-        # 更新面数组
+        # 将选中的面对应的布尔值设置为False
+        for face_id in self.selected_faces:
+            mask[face_id] = False
+        
+        # 使用布尔掩码选择未被删除的面
         self.mesh_data['faces'] = self.mesh_data['faces'][mask]
         
-        # 只有在法线数组存在且大小匹配时才更新
+        # 更新法线数组（如果存在）
         if 'normals' in self.mesh_data:
             if len(self.mesh_data['normals']) == len(mask):
                 self.mesh_data['normals'] = self.mesh_data['normals'][mask]
@@ -1637,6 +2028,12 @@ class MeshViewerQt(QMainWindow):
         self.selected_faces = []
         print("已删除选中的面")
         self.update_display()
+        
+        # 标记模型已经修改，追踪删除的面
+        self.model_modified = True
+        self.detection_cache = {k: None for k in self.detection_cache}
+        if hasattr(self, 'model_tracker'):
+            self.model_tracker.track_modification('faces', deleted_face_ids)
         
         # 由于模型已改变，重新进行检测
         self.update_model_analysis()
@@ -1659,6 +2056,10 @@ class MeshViewerQt(QMainWindow):
         self.update_display()
         print(f"创建了新面: {new_face}")
         
+        # 标记模型已经修改，清除缓存
+        self.model_modified = True
+        self.detection_cache = {k: None for k in self.detection_cache}
+        
         # 由于模型已改变，重新进行检测
         self.update_model_analysis()
     
@@ -1668,6 +2069,7 @@ class MeshViewerQt(QMainWindow):
             self.selected_points = []
         elif self.selection_mode == 'edge':
             self.selected_edges = []
+            self.edge_selection_source = 'manual' # 重置边选择来源
         elif self.selection_mode == 'face':
             self.selected_faces = []
         # 更新显示
@@ -1683,11 +2085,10 @@ class MeshViewerQt(QMainWindow):
         self.update_status_counts()
     
     def clear_edges(self):
-        """清除选中的线"""
+        """清除所有选中的边"""
         self.selected_edges = []
+        self.edge_selection_source = 'manual'  # 重置为手动选择模式
         self.update_display()
-        # 不重置边数量标签，只更新状态栏
-        self.update_status_counts()
     
     def clear_faces(self):
         """清除选中的面"""
@@ -1737,583 +2138,550 @@ class MeshViewerQt(QMainWindow):
 
     def select_free_edges(self):
         """选择自由边"""
-        # 获取所有边的端点
-        edges = set()  # 使用集合来存储边，每条边由两个端点的元组表示
-        edge_count = {}  # 用字典记录每条边出现的次数
-        
-        # 遍历所有面片，收集边信息
-        for face in self.mesh_data['faces']:
-            # 获取面片的三条边
-            edge1 = tuple(sorted([face[0], face[1]]))
-            edge2 = tuple(sorted([face[1], face[2]]))
-            edge3 = tuple(sorted([face[2], face[0]]))
+        try:
+            # 检查是否有缓存结果且模型未修改
+            if not self.model_modified and self.detection_cache['free_edges'] is not None:
+                # 直接使用缓存结果 - 加载前先清空，并使用副本
+                self.selected_edges = [] 
+                self.selected_edges = self.detection_cache['free_edges'].copy() # 使用 .copy()
+                self.edge_selection_source = 'auto'  # 设置为自动选择
+                self.adjust_font_size(self.free_edge_count, str(len(self.selected_edges))) # 更新按钮旁边的标签
+                self.update_display()
+                print("使用缓存：自由边检测 (已选择 " + str(len(self.selected_edges)) + " 条边)")
+                return
+                
+            # 显示进度对话框
+            progress = QProgressDialog("检测自由边...", "取消", 0, 100, self)
+            progress.setWindowTitle("自由边检测")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.show()
+            progress.setValue(10)
             
-            # 更新边的计数
-            edge_count[edge1] = edge_count.get(edge1, 0) + 1
-            edge_count[edge2] = edge_count.get(edge2, 0) + 1
-            edge_count[edge3] = edge_count.get(edge3, 0) + 1
-        
-        # 找出只出现一次的边（自由边）
-        free_edges = [edge for edge, count in edge_count.items() if count == 1]
-        
-        # 清除之前的选择
-        self.selected_edges = []
-        
-        # 添加自由边到选择列表
-        self.selected_edges.extend(free_edges)
-        
-        # 更新显示
-        self.update_display()
-        
-        # 检查是否找到了自由边
-        if len(self.selected_edges) > 0:
-            # 更新数字标签为实际数量
-            self.adjust_font_size(self.free_edge_count, str(len(self.selected_edges)))
-        else:
-            # 如果没有找到，显示为0
-            self.adjust_font_size(self.free_edge_count, "0")
-        
-        # 更新状态栏显示
-        self.adjust_font_size(self.free_edge_count, str(len(self.selected_edges)))
+            # 创建并执行自由边检测算法
+            algorithm = FreeEdgesAlgorithm(self.mesh_data)
+            # 注意：FreeEdgesAlgorithm的execute方法接受parent参数，不是progress_callback
+            result = algorithm.execute(parent=self)
+            
+            # 更新选择
+            if 'selected_edges' in result and result['selected_edges']:
+                self.selected_edges = result['selected_edges']
+                self.edge_selection_source = 'auto'  # 设置为自动选择
+                # 缓存结果
+                self.detection_cache['free_edges'] = self.selected_edges.copy()
+                
+                self.update_display()
+                self.adjust_font_size(self.free_edge_count, str(len(self.selected_edges)))
+                # 消息框由算法内部显示，无需在这里显示
+            else:
+                self.clear_edges()
+                self.adjust_font_size(self.free_edge_count, "0")
+                # 缓存结果（空列表）
+                self.detection_cache['free_edges'] = []
+                
+                # 如果算法内部没有显示消息，则在这里显示
+                if not hasattr(algorithm, 'message_shown') or not algorithm.message_shown:
+                    QMessageBox.information(self, "检测完成", "未检测到自由边。")
+            
+            progress.setValue(100)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"自由边检测失败: {str(e)}")
 
     def select_overlapping_edges(self):
         """检测并选择重叠边"""
-        # 清除之前的选择
-        self.clear_selection()
-        
-        # 获取所有边的端点
-        edges = {}
-        for face in self.mesh_data['faces']:
-            for i in range(len(face)):
-                # 获取边的两个端点
-                p1 = face[i]
-                p2 = face[(i + 1) % len(face)]
-                
-                # 确保边的方向一致（较小的点索引在前）
-                edge = tuple(sorted([p1, p2]))
-                
-                # 记录边的出现次数
-                if edge in edges:
-                    edges[edge] += 1
-                else:
-                    edges[edge] = 1
-        
-        # 找出重叠边（出现次数大于2的边）
-        overlapping_edges = [edge for edge, count in edges.items() if count > 2]
-        
-        # 选择重叠边
-        self.selected_edges = overlapping_edges
-        
-        # 更新显示
-        self.update_display()
-        
-        # 检查是否找到了重叠边
-        if len(self.selected_edges) > 0:
-            # 更新数字标签为实际数量
-            self.adjust_font_size(self.overlap_edge_count, str(len(self.selected_edges)))
-        else:
-            # 如果没有找到，显示为0
-            self.adjust_font_size(self.overlap_edge_count, "0")
-        
-        # 更新状态栏显示
-        self.adjust_font_size(self.overlap_edge_count, str(len(self.selected_edges)))
-
-    def create_octree(self, faces, vertices, max_depth=10, min_faces=10):
-        """创建八叉树空间分区"""
-        # 计算所有面片的包围盒
-        face_vertices = vertices[faces]
-        min_bounds = np.min(face_vertices.reshape(-1, 3), axis=0)
-        max_bounds = np.max(face_vertices.reshape(-1, 3), axis=0)
-        center = (min_bounds + max_bounds) / 2
-        size = max(max_bounds - min_bounds) * 1.01  # 稍微扩大一点以确保包含所有面片
-
-        class OctreeNode:
-            def __init__(self, center, size, depth):
-                self.center = center
-                self.size = size
-                self.depth = depth
-                self.faces = []
-                self.children = None
-
-            def get_octant(self, point):
-                """确定点属于哪个八分区"""
-                return ((point[0] > self.center[0]) << 2 |
-                        (point[1] > self.center[1]) << 1 |
-                        (point[2] > self.center[2]))
-
-        def build_octree(node, face_indices):
-            if len(face_indices) <= min_faces or node.depth >= max_depth:
-                node.faces = face_indices
+        try:
+            # 检查是否有缓存结果且模型未修改
+            if not self.model_modified and self.detection_cache['overlapping_edges'] is not None:
+                # 直接使用缓存结果 - 加载前先清空，并使用副本
+                self.selected_edges = []
+                self.selected_edges = self.detection_cache['overlapping_edges'].copy() # 使用 .copy()
+                self.edge_selection_source = 'auto'  # 设置为自动选择
+                self.adjust_font_size(self.overlap_edge_count, str(len(self.selected_edges))) # 更新按钮旁边的标签
+                self.update_display()
+                print("使用缓存：重叠边检测 (已选择 " + str(len(self.selected_edges)) + " 条边)")
                 return
-
-            # 创建子节点
-            node.children = [None] * 8
-            child_faces = [[] for _ in range(8)]
-            half_size = node.size / 2
-
-            # 分配面片到子节点
-            for face_idx in face_indices:
-                face_center = np.mean(vertices[faces[face_idx]], axis=0)
-                octant = node.get_octant(face_center)
-                child_faces[octant].append(face_idx)
-
-            # 递归构建子节点
-            for i in range(8):
-                if child_faces[i]:
-                    offset = np.array([(i & 4) > 0, (i & 2) > 0, (i & 1) > 0]) * half_size - half_size/2
-                    child_center = node.center + offset
-                    node.children[i] = OctreeNode(child_center, half_size, node.depth + 1)
-                    build_octree(node.children[i], child_faces[i])
-
-        # 创建根节点并构建八叉树
-        root = OctreeNode(center, size, 0)
-        build_octree(root, list(range(len(faces))))
-        return root
-
-    def check_triangle_intersection(self, tri1_verts, tri2_verts):
-        """优化的分离轴定理(SAT)检查两个三角形是否相交"""
-        # 快速共面检测 - 如果两个三角形近似共面且不重叠，可以快速排除
-        def get_normal(tri):
-            v1 = tri[1] - tri[0]
-            v2 = tri[2] - tri[0]
-            normal = np.cross(v1, v2)
-            norm = np.linalg.norm(normal)
-            if norm < 1e-10:  # 处理退化三角形
-                return np.zeros(3)
-            return normal / norm
-        
-        # 获取三角形的边
-        def get_edges(tri):
-            return [tri[1] - tri[0], tri[2] - tri[1], tri[0] - tri[2]]
-        
-        # 投影三角形到轴上
-        def project_triangle(tri, axis):
-            dots = [np.dot(v, axis) for v in tri]
-            return min(dots), max(dots)
-        
-        # 检查在给定轴上是否分离
-        def check_separation(tri1, tri2, axis):
-            if np.all(np.abs(axis) < 1e-10):  # 避免零向量
-                return False
-            p1_min, p1_max = project_triangle(tri1, axis)
-            p2_min, p2_max = project_triangle(tri2, axis)
-            return p1_max < p2_min or p2_max < p1_min
-        
-        # 1. 检查面法向量轴
-        normal1 = get_normal(tri1_verts)
-        normal2 = get_normal(tri2_verts)
-        
-        if not np.all(np.abs(normal1) < 1e-10) and check_separation(tri1_verts, tri2_verts, normal1):
-            return False
-        
-        if not np.all(np.abs(normal2) < 1e-10) and check_separation(tri1_verts, tri2_verts, normal2):
-            return False
-        
-        # 2. 检查边叉积轴
-        edges1 = get_edges(tri1_verts)
-        edges2 = get_edges(tri2_verts)
-        
-        for e1 in edges1:
-            for e2 in edges2:
-                cross = np.cross(e1, e2)
-                if np.any(np.abs(cross) > 1e-10):  # 避免接近零的叉积
-                    axis = cross / np.linalg.norm(cross)
-                    if check_separation(tri1_verts, tri2_verts, axis):
-                        return False
-        
-        # 没有找到分离轴，三角形相交
-        return True
+                
+            # 显示进度对话框
+            progress = QProgressDialog("检测重叠边...", "取消", 0, 100, self)
+            progress.setWindowTitle("重叠边检测")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.show()
+            progress.setValue(10)
+            
+            # 创建并执行重叠边检测算法
+            algorithm = OverlappingEdgesAlgorithm(self.mesh_data)
+            result = algorithm.execute(parent=self)
+            
+            # 更新选择
+            if 'selected_edges' in result and result['selected_edges']:
+                self.selected_edges = result['selected_edges']
+                self.edge_selection_source = 'auto'  # 设置为自动选择
+                # 缓存结果
+                self.detection_cache['overlapping_edges'] = self.selected_edges.copy()
+                
+                self.update_display()
+                self.adjust_font_size(self.overlap_edge_count, str(len(self.selected_edges)))
+                # 消息框由算法内部显示，无需在这里显示
+            else:
+                self.clear_edges()
+                self.adjust_font_size(self.overlap_edge_count, "0")
+                # 缓存结果（空列表）
+                self.detection_cache['overlapping_edges'] = []
+                
+                # 如果算法内部没有显示消息，则在这里显示
+                if not hasattr(algorithm, 'message_shown') or not algorithm.message_shown:
+                    QMessageBox.information(self, "检测完成", "未检测到重叠边。")
+                
+            progress.setValue(100)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"重叠边检测失败: {str(e)}")
 
     def detect_face_intersections(self):
-        """使用八叉树空间分区优化的相交面检测算法"""
-        if not self.mesh_data['faces'].size:
-            QMessageBox.warning(self, '警告', '没有可分析的面片')
-            return
-
-        # 清除之前的选择
-        self.clear_all_selections()
-
-        # 获取所有面片的顶点坐标
-        faces = self.mesh_data['faces']
-        vertices = self.mesh_data['vertices']
-        
-        # 计算每个面片的AABB包围盒和中心点
-        face_bboxes = []
-        face_centers = []
-        for face_idx in range(len(faces)):
-            face_verts = vertices[faces[face_idx]]
-            min_coords = np.min(face_verts, axis=0)
-            max_coords = np.max(face_verts, axis=0)
-            face_bboxes.append((min_coords, max_coords))
-            face_centers.append(np.mean(face_verts, axis=0))
-        
-        # 创建八叉树进行空间分区
-        octree = self.create_octree(faces, vertices, max_depth=8, min_faces=20)
-        
-        # 用于存储相交的面片
-        intersecting_faces = set()
-        
-        # 创建进度对话框
-        total_faces = len(faces)
-        progress = QProgressDialog("检测相交面...", "取消", 0, total_faces, self)
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.show()
-        
-        # 用于提前终止的标志
-        cancelled = False
-        
-        # 递归查询八叉树
-        def query_octree(node, face_idx):
-            nonlocal cancelled
-            
-            # 检查是否取消
-            if progress.wasCanceled():
-                cancelled = True
-                return
-            
-            # 如果节点为空，直接返回
-            if not node or cancelled:
-                return
-            
-            # 如果节点是叶子节点，检查所有面片
-            if not node.children:
-                face1_verts = vertices[faces[face_idx]]
-                min1, max1 = face_bboxes[face_idx]
-                
-                for other_idx in node.faces:
-                    # 跳过自身
-                    if other_idx == face_idx:
-                        continue
-                    
-                    # 快速AABB包围盒检测
-                    min2, max2 = face_bboxes[other_idx]
-                    if np.all(max1 >= min2) and np.all(max2 >= min1):
-                        face2_verts = vertices[faces[other_idx]]
-                        # 只有当两个面片不共享顶点时才检查相交
-                        if not set(faces[face_idx]).intersection(set(faces[other_idx])):
-                            if self.check_triangle_intersection(face1_verts, face2_verts):
-                                intersecting_faces.add(face_idx)
-                                intersecting_faces.add(other_idx)
-                return
-            
-            # 否则，递归查询子节点
-            face_min, face_max = face_bboxes[face_idx]
-            for i, child in enumerate(node.children):
-                if child:
-                    # 计算子节点的包围盒
-                    half_size = child.size / 2
-                    child_min = child.center - half_size
-                    child_max = child.center + half_size
-                    
-                    # 检查面片的包围盒是否与子节点的包围盒相交
-                    if np.all(face_max >= child_min) and np.all(child_max >= face_min):
-                        query_octree(child, face_idx)
-        
+        """检测面片交叉"""
         try:
-            # 对每个面片，在八叉树中查询可能相交的面片
-            for face_idx in range(total_faces):
-                if cancelled:
-                    break
+            # 检查是否有缓存结果且模型未修改
+            if not self.model_modified and self.detection_cache['face_intersections'] is not None:
+                # 直接使用缓存结果 - 使用副本并更新标签
+                self.selected_faces = self.detection_cache['face_intersections'].copy() # 使用 .copy()
+                # 如果缓存中有相交映射关系，也一并恢复
+                if 'face_intersection_map' in self.detection_cache and self.detection_cache['face_intersection_map'] is not None:
+                    self.face_intersection_map = self.detection_cache['face_intersection_map'].copy() # 使用 .copy()
+                else:
+                    self.face_intersection_map = {} # 确保如果缓存中没有map，则初始化为空
+                self.adjust_font_size(self.intersection_count, str(len(self.selected_faces))) # 更新按钮旁边的标签
+                self.update_display()
+                print("使用缓存：交叉面检测 (已选择 " + str(len(self.selected_faces)) + " 个面)")
+                return
                 
-                # 在八叉树中查询
-                query_octree(octree, face_idx)
+            # 显示进度对话框
+            progress = QProgressDialog("检测穿刺面...", "取消", 0, 100, self)
+            progress.setWindowTitle("穿刺面检测")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.show()
+            progress.setValue(10)
+            
+            # 设置增强CPP优先的配置
+            cpp_preference = {
+                "use_cpp": True,
+                "force_enhanced": hasattr(self, 'has_enhanced_pierced_faces') and self.has_enhanced_pierced_faces
+            }
+            
+            # 创建并执行穿刺面检测算法 - 使用新的合并算法，设置detection_mode="pierced"
+            from algorithms.combined_intersection_algorithm import CombinedIntersectionAlgorithm
+            algorithm = CombinedIntersectionAlgorithm(self.mesh_data, detection_mode="pierced")
+            
+            # 如果存在增强模块，设置增强标志
+            if hasattr(self, 'has_enhanced_pierced_faces'):
+                algorithm.enhanced_cpp_available = self.has_enhanced_pierced_faces
+            
+            result = algorithm.execute(parent=self)
+            
+            # 获取运行时间信息
+            detection_time = result.get('detection_time', 0)
+            total_time = result.get('total_time', 0)
+            
+            # 更新选择和相交关系
+            if 'selected_faces' in result and result['selected_faces']:
+                self.selected_faces = result['selected_faces']
+                # 保存相交映射关系
+                if 'intersection_map' in result:
+                    self.face_intersection_map = {int(k): v for k, v in result['intersection_map'].items()}
+                else:
+                    self.face_intersection_map = {}
                 
-                # 更新进度
-                progress.setValue(face_idx + 1)
-                QApplication.processEvents()  # 确保UI响应
-            
-            # 更新选中的面片
-            self.selected_faces = list(intersecting_faces)
-            
-            # 更新显示
-            self.update_display()
-            
-            # 检查是否找到了相交面
-            if len(self.selected_faces) > 0:
-                # 更新数字标签为实际数量
+                # 缓存结果
+                self.detection_cache['face_intersections'] = self.selected_faces.copy()
+                self.detection_cache['face_intersection_map'] = self.face_intersection_map.copy() if hasattr(self, 'face_intersection_map') else {}
+                
+                # 获取相交关系总数
+                total_intersections = result.get('total_intersections', 0)
+                
+                self.update_display()
                 self.adjust_font_size(self.intersection_count, str(len(self.selected_faces)))
-            else:
-                # 如果没有找到，显示为0
-                self.adjust_font_size(self.intersection_count, "0")
-            
-            # 更新状态栏信息
-            if cancelled:
-                self.statusBar.showMessage('交叉面检测已取消')
-            elif self.selected_faces:
-                self.statusBar.showMessage(f'检测到 {len(self.selected_faces)} 个相交面片')
-            else:
-                self.statusBar.showMessage('未检测到相交面片')
                 
-        finally:
-            progress.close()
+                # 显示更详细的相交信息
+                if not hasattr(algorithm, 'message_shown') or not algorithm.message_shown:
+                    relation_info = f"发现{len(self.selected_faces)}个穿刺面，共有{total_intersections}对相交关系。"
+                    cpp_info = ""
+                    
+                    # 添加关于使用的模块信息
+                    if hasattr(algorithm, 'used_enhanced_cpp') and algorithm.used_enhanced_cpp:
+                        cpp_info = "\n已使用增强版C++模块(支持完整相交关系映射)"
+                    elif hasattr(algorithm, 'use_cpp') and algorithm.use_cpp:
+                        cpp_info = "\n已使用基础版C++模块"
+                        
+                    QMessageBox.information(self, "检测完成", relation_info + cpp_info)
+                    
+            else:
+                self.clear_faces()
+                self.face_intersection_map = {}
+                self.adjust_font_size(self.intersection_count, "0")
+                # 缓存结果（空列表）
+                self.detection_cache['face_intersections'] = []
+                self.detection_cache['face_intersection_map'] = {}
+                
+                # 如果算法内部没有显示消息，则在这里显示
+                if not hasattr(algorithm, 'message_shown') or not algorithm.message_shown:
+                    QMessageBox.information(self, "检测完成", f"未检测到穿刺面。\n检测用时: {detection_time:.4f}秒\n总用时: {total_time:.4f}秒")
+                
+            progress.setValue(100)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"穿刺面检测失败: {str(e)}")
 
     def analyze_face_quality(self):
-        """
-        使用STAR-CCM+的算法分析面片质量
-        
-        STAR-CCM+的面片质量算法: face quality = 2 * (r/R)
-        其中：
-        r = 内接圆半径
-        R = 外接圆半径
-        """
+        """分析面片质量"""
         try:
-            # 导入STAR-CCM+面片质量分析算法
-            from star_ccm_face_quality import analyze_face_quality, generate_quality_report
-            import numpy as np
-            import vtk
-            from PyQt5.QtWidgets import QInputDialog, QProgressDialog, QMessageBox
-            import matplotlib.cm as cm
-            import matplotlib.colors as mcolors
-            
-            # 获取网格数据
-            if not self.mesh_data or 'vertices' not in self.mesh_data or 'faces' not in self.mesh_data:
-                QMessageBox.warning(self, "错误", "没有可用的网格数据")
+            # 检查是否有缓存结果且模型未修改
+            if not self.model_modified and self.detection_cache['face_quality'] is not None:
+                # 直接使用缓存结果 - 使用副本并更新标签
+                self.selected_faces = self.detection_cache['face_quality'].copy() # 使用 .copy()
+                self.adjust_font_size(self.quality_count, str(len(self.selected_faces))) # 更新按钮旁边的标签
+                self.update_display()
+                print("使用缓存：面片质量分析 (已选择 " + str(len(self.selected_faces)) + " 个面)")
                 return
-            
+                
             # 获取用户输入的质量阈值
             threshold, ok = QInputDialog.getDouble(
                 self, "设置面片质量阈值", 
-                "请输入质量阈值 (0.01-0.95)，较小的值表示更低的质量标准:",
-                0.3, 0.01, 0.95, 2)
+                "请输入质量阈值 (0.1-0.5)，较小的值检测更严格:", 
+                0.3, 0.1, 0.5, 2)
             
             if not ok:
                 return
-            
-            # 创建进度对话框
-            progress = QProgressDialog("分析面片质量...", "取消", 0, 100, self)
-            progress.setWindowTitle("STAR-CCM+面片质量分析")
-            progress.setMinimumDuration(0)
-            progress.setWindowModality(2)  # 应用程序模态
+                
+            # 显示进度对话框
+            progress = QProgressDialog("准备分析面片质量...", "取消", 0, 100, self)
+            progress.setWindowTitle("面片质量分析")
+            progress.setWindowModality(Qt.WindowModal)
             progress.show()
+            progress.setValue(5)
             
-            # 进度回调函数
-            def update_progress(value, message):
-                progress.setValue(value)
-                progress.setLabelText(message)
-                return not progress.wasCanceled()
+            # 检查是否可以使用C++实现
+            try:
+                import face_quality_cpp
+                has_cpp = True
+                progress.setLabelText("使用C++算法分析面片质量（高性能模式）...")
+            except ImportError:
+                has_cpp = False
+                progress.setLabelText("使用Python算法分析面片质量（未找到C++模块）...")
+                # 显示推荐安装C++模块的提示
+                self.statusBar.showMessage("提示: 安装C++模块可显著提高性能")
             
-            # 准备面片和顶点数据
-            vertices = np.array(self.mesh_data['vertices'])
-            faces = np.array(self.mesh_data['faces'])
+            progress.setValue(10)
             
-            # 使用STAR-CCM+算法分析面片质量
-            results = analyze_face_quality(vertices, faces, threshold, update_progress)
+            # 创建并执行面片质量分析算法，明确设置use_cpp=True
+            algorithm = FaceQualityAlgorithm(self.mesh_data, threshold=threshold)
+            algorithm.use_cpp = has_cpp  # 明确设置是否使用C++
             
-            if results is None:  # 用户取消
-                progress.close()
-                return
+            # 执行算法
+            result = algorithm.execute(parent=self)
             
-            # 关闭进度对话框
-            progress.setValue(100)
-            
-            # 将低质量面片添加到选择中
-            self.selected_faces = results['low_quality_faces']
-            
-            # 显示质量报告
-            report = generate_quality_report(results['stats'])
-            print(report)  # 使用print输出报告
-            
-            # 显示结果信息在对话框中
-            QMessageBox.information(
-                self, 
-                "面片质量分析完成", 
-                f"分析完成，找到 {len(self.selected_faces)} 个低质量面片。\n\n{report}"
-            )
-            
-            # 更新显示（但不改变面片颜色）
-            self.update_display()
-            
-            # 显示结果消息
-            self.statusBar.showMessage(f'找到 {len(self.selected_faces)} 个低质量面片')
-            
-            # 检查是否找到了质量问题面片
-            if hasattr(self, 'quality_count'):
-                if len(self.selected_faces) > 0:
-                    # 更新数字标签为实际数量
-                    if hasattr(self, 'adjust_font_size'):
-                        self.adjust_font_size(self.quality_count, str(len(self.selected_faces)))
+            # 更新选择
+            if 'selected_faces' in result and result['selected_faces']:
+                self.selected_faces = result['selected_faces']
+                # 缓存结果
+                self.detection_cache['face_quality'] = self.selected_faces.copy()
+                
+                self.update_display()
+                self.adjust_font_size(self.quality_count, str(len(self.selected_faces)))
+                
+                # 显示质量报告
+                if 'report' in result and not hasattr(algorithm, 'message_shown'):
+                    QMessageBox.information(
+                        self, "质量分析完成", 
+                        f"找到 {len(self.selected_faces)} 个低质量面片。\n\n{result['report']}"
+                    )
+                
+                # 在状态栏显示结果
+                if has_cpp:
+                    self.statusBar.showMessage(f"检测到 {len(self.selected_faces)} 个低质量面片 (C++算法，阈值 < {threshold})")
                 else:
-                    # 如果没有找到，显示为0
-                    if hasattr(self, 'adjust_font_size'):
-                        self.adjust_font_size(self.quality_count, "0")
+                    self.statusBar.showMessage(f"检测到 {len(self.selected_faces)} 个低质量面片 (Python算法，阈值 < {threshold})")
+            else:
+                self.clear_faces()
+                self.adjust_font_size(self.quality_count, "0")
+                # 缓存结果（空列表）
+                self.detection_cache['face_quality'] = []
+                
+                if not hasattr(algorithm, 'message_shown') or not algorithm.message_shown:
+                    QMessageBox.information(self, "质量分析完成", "未检测到低质量面片。")
+                
+                # 在状态栏显示结果
+                if has_cpp:
+                    self.statusBar.showMessage(f"未检测到低质量面片 (C++算法，阈值 < {threshold})")
+                else:
+                    self.statusBar.showMessage(f"未检测到低质量面片 (Python算法，阈值 < {threshold})")
+                
+            progress.setValue(100)
             
         except Exception as e:
             import traceback
-            traceback.print_exc()
-            QMessageBox.critical(self, "错误", f"面片质量分析失败: {str(e)}")
+            error_msg = f"面片质量分析失败: {str(e)}\n{traceback.format_exc()}"
+            QMessageBox.critical(self, "错误", error_msg)
+            self.statusBar.showMessage("面片质量分析失败")
 
     def select_adjacent_faces(self):
-        """
-        分析面片邻近性，使用STAR-CCM+公式和高性能算法来检测和识别问题面片。
-        
-        性能优化策略:
-        1. 使用专用的高性能实现，从独立模块导入
-        2. 利用numpy向量化操作 
-        3. 使用空间哈希网格而非KD-tree加速空间查询
-        4. 使用AABB包围盒快速剔除
-        5. 多线程并行计算面片距离
-        """
+        """分析面片邻近性，使用C++实现"""
         try:
-            # 导入面片邻近性检测模块
-            from face_proximity_analyzer import detect_face_proximity
-            import numpy as np
-            from PyQt5.QtWidgets import QInputDialog, QProgressDialog, QMessageBox
+            # 检查是否有缓存结果且模型未修改
+            if not self.model_modified and self.detection_cache['adjacent_faces'] is not None:
+                # 直接使用缓存结果
+                self.selected_faces = self.detection_cache['adjacent_faces']
+                self.update_display()
+                print("使用缓存：相邻面分析 (已选择 " + str(len(self.selected_faces)) + " 个面)")
+                return
+                
+            # 检查mesh_data是否有效
+            if not self.mesh_data or 'vertices' not in self.mesh_data or 'faces' not in self.mesh_data:
+                QMessageBox.warning(self, "数据错误", "无效的网格数据，请先加载有效的3D模型。")
+                self.statusBar.showMessage("邻近性分析失败：无效的网格数据")
+                return
+                
+            # 检查顶点和面片数据
+            if len(self.mesh_data['vertices']) == 0 or len(self.mesh_data['faces']) == 0:
+                QMessageBox.warning(self, "数据错误", "模型没有顶点或面片数据。")
+                self.statusBar.showMessage("邻近性分析失败：模型没有有效数据")
+                return
             
             # 获取用户输入的邻近阈值
             threshold, ok = QInputDialog.getDouble(
                 self, "设置面片邻近性阈值", 
-                "请输入邻近性阈值 (0.01-0.5)，较小的值检测更严格:", 
-                0.1, 0.01, 0.5, 2)
+                "请输入邻近性阈值 (0-1)，较小的值检测更严格:", 
+                0.1, 0.0, 1.0, 2)
             
             if not ok:
                 return
-
-            # 创建进度对话框
+                
+            # 显示进度对话框
             progress = QProgressDialog("分析面片邻近性...", "取消", 0, 100, self)
             progress.setWindowTitle("面片邻近性分析")
-            progress.setMinimumDuration(0)
-            progress.setWindowModality(2)  # 应用程序模态
+            progress.setWindowModality(Qt.WindowModal)
             progress.show()
             
-            # 进度回调函数
-            def update_progress(value, message):
-                progress.setValue(value)
-                progress.setLabelText(message)
-                if progress.wasCanceled():
-                    raise Exception("用户取消")
-            
-            # 清除当前选择
-            self.clear_selection()
-            
-            # 准备面片和顶点数据为numpy数组
-            vertices = np.array(self.mesh_data['vertices'])
-            faces = np.array(self.mesh_data['faces'])
-            
-            # 使用面片邻近性检测模块检测过近的面片
-            proximity_faces = detect_face_proximity(
-                faces, vertices, threshold, 
-                progress_callback=update_progress
-            )
-            
-            # 将检测到的面片转换为选择
-            if proximity_faces:
-                # 将检测到的面片添加到选择中
-                self.selected_faces = list(proximity_faces)
+            # 使用adjacent_faces_cpp模块（专用C++实现）
+            try:
+                # 使用绝对导入路径以确保找到正确的模块
+                import sys
+                import os
+                # 添加当前工作目录到路径中，确保可以找到正确的模块
+                current_dir = os.getcwd()
+                if current_dir not in sys.path:
+                    sys.path.insert(0, current_dir)
+                # 同时尝试添加src目录到路径中
+                src_dir = os.path.join(current_dir, "src")
+                if os.path.exists(src_dir) and src_dir not in sys.path:
+                    sys.path.insert(0, src_dir)
                 
-                # 更新网格显示
+                # 重新导入模块
+                if 'adjacent_faces_cpp' in sys.modules:
+                    del sys.modules['adjacent_faces_cpp']
+                import adjacent_faces_cpp
+                
+                progress.setLabelText("使用C++专用算法检测相邻面...")
+                print(f"成功导入模块，可用函数: {[f for f in dir(adjacent_faces_cpp) if not f.startswith('__')]}")
+                
+                # 检查模块是否包含expected方法
+                if not hasattr(adjacent_faces_cpp, 'detect_adjacent_faces_with_timing'):
+                    raise AttributeError("导入的C++模块缺少必要的函数：detect_adjacent_faces_with_timing")
+            except ImportError as e:
+                QMessageBox.critical(self, "错误", f"无法导入adjacent_faces_cpp模块: {e}\n请确保已正确编译C++扩展。")
+                self.statusBar.showMessage("邻近性分析失败：未找到C++模块")
+                progress.close()
+                return
+            except AttributeError as e:
+                QMessageBox.critical(self, "错误", str(e))
+                self.statusBar.showMessage("邻近性分析失败：C++模块不完整")
+                progress.close()
+                return
+            
+            progress.setValue(20)
+            
+            # 转换数据为numpy数组
+            import numpy as np
+            vertices_np = np.array(self.mesh_data['vertices'], dtype=np.float32)
+            faces_np = np.array(self.mesh_data['faces'], dtype=np.int32)
+            
+            # 调用C++模块
+            start_time = time.time()
+            
+            try:
+                # 调用C++扩展模块的函数
+                print(f"准备调用C++函数，传递参数: vertices形状={vertices_np.shape}, faces形状={faces_np.shape}, threshold={threshold}")
+                adjacent_pairs, execution_time = adjacent_faces_cpp.detect_adjacent_faces_with_timing(
+                    vertices_np, faces_np, proximity_threshold=float(threshold)
+                )
+                
+                print(f"C++函数返回类型: 相邻对={type(adjacent_pairs)}, 执行时间={type(execution_time)}")
+                
+                progress.setValue(80)
+                
+                # 将相邻面对转换为选中面片列表
+                face_set = set()
+                # 确保adjacent_pairs是可迭代的
+                if adjacent_pairs is not None:
+                    for pair in adjacent_pairs:
+                        if isinstance(pair, tuple) or isinstance(pair, list):
+                            i, j = pair
+                            face_set.add(int(i))
+                            face_set.add(int(j))
+                        else:
+                            print(f"警告: 意外的相邻对格式: {type(pair)}")
+                
+                selected_faces = list(face_set)
+                
+                end_time = time.time()
+                total_time = end_time - start_time
+                
+                print(f"已使用C++算法检测到{len(selected_faces)}个相邻面")
+                print(f"C++内部执行时间: {execution_time:.4f}秒")
+                print(f"总处理时间: {total_time:.4f}秒")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"调用C++模块失败: {str(e)}")
+                self.statusBar.showMessage("邻近性分析失败：C++模块执行错误")
+                progress.close()
+                return
+            
+            # 更新选择
+            if selected_faces:
+                self.selected_faces = selected_faces
+                # 缓存结果
+                self.detection_cache['adjacent_faces'] = self.selected_faces.copy()
+                
                 self.update_display()
+                self.adjust_font_size(self.proximity_count, str(len(self.selected_faces)))
                 
-                # 显示结果信息
+                # 显示结果 (修复缩进错误)
+                total_faces = len(self.mesh_data['faces'])
+                percentage = len(self.selected_faces) / total_faces * 100 if total_faces > 0 else 0
                 QMessageBox.information(
                     self, "邻近性分析完成", 
-                    f"检测到 {len(proximity_faces)} 个邻近面片，占总面片数的 {len(proximity_faces)/len(faces)*100:.2f}%。\n"
-                    f"这些面片已被选中。"
+                    f"检测到 {len(self.selected_faces)} 个邻近面片 (根据定义: 相交或邻近度 <= {threshold:.2f})，占总面片数的 {percentage:.2f}%。\n"
+                    f"C++执行时间: {execution_time:.4f}秒"
                 )
+                
+                # 在状态栏显示结果
+                self.statusBar.showMessage(f"检测到 {len(self.selected_faces)} 个邻近面片 (阈值={threshold:.2f}, C++实现)")
             else:
-                QMessageBox.information(self, "邻近性分析完成", "未检测到邻近面片。")
-            
-            # 关闭进度对话框
+                self.clear_faces()
+                self.adjust_font_size(self.proximity_count, "0")
+                # 缓存结果（空列表）
+                self.detection_cache['adjacent_faces'] = []
+                
+                # 显示结果
+                QMessageBox.information(
+                    self, "邻近性分析完成", 
+                    f"未检测到邻近面片 (阈值={threshold:.2f})。\nC++执行时间: {execution_time:.4f}秒"
+                )
+                
+                # 在状态栏显示结果
+                self.statusBar.showMessage(f"未检测到邻近面片 (阈值={threshold:.2f}, C++实现)")
+                
             progress.setValue(100)
             
-            # 检查是否找到了邻近面片
-            if len(self.selected_faces) > 0:
-                # 更新数字标签为实际数量
-                self.adjust_font_size(self.proximity_count, str(len(self.selected_faces)))
-            else:
-                # 如果没有找到，显示为0
-                self.adjust_font_size(self.proximity_count, "0")
-            
-        except ImportError:
-            QMessageBox.critical(
-                self, "模块缺失", 
-                "无法导入面片邻近性检测模块。请确保face_proximity_analyzer.py文件存在于src目录中。"
-            )
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"邻近性分析失败: {str(e)}")
+            import traceback
+            error_msg = f"邻近性分析失败: {str(e)}\n{traceback.format_exc()}"
+            QMessageBox.critical(self, "错误", error_msg)
+            self.statusBar.showMessage("邻近性分析失败")
 
     def select_overlapping_points(self):
-        """检测并选择重叠点
-        重叠点的定义：当一个点连接的自由边数量为4或更大的偶数时，该点被认为是重叠点
-        """
-        # 清除之前的选择
-        self.clear_selection()
-        
-        # 获取所有面和顶点
-        faces = self.mesh_data['faces']
-        vertices = self.mesh_data['vertices']
-        
-        # 创建进度对话框
-        progress = QProgressDialog("检测重叠点...", "取消", 0, 100, self)
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.show()
-        progress.setValue(10)
-        
+        """检测并选择重叠点"""
         try:
-            # 用于存储每个点连接的边
-            point_edges = {i: [] for i in range(len(vertices))}
+            # 检查是否有缓存结果且模型未修改
+            if not self.model_modified and self.detection_cache['overlapping_points'] is not None:
+                # 直接使用缓存结果 - 使用副本并更新标签
+                self.selected_points = self.detection_cache['overlapping_points'].copy() # 使用 .copy()
+                self.adjust_font_size(self.overlap_point_count, str(len(self.selected_points))) # 更新按钮旁边的标签
+                self.update_display()
+                print("使用缓存：重叠点检测 (已选择 " + str(len(self.selected_points)) + " 个点)")
+                return
+                  
+            # 显示进度对话框
+            progress = QProgressDialog("检测重叠点...", "取消", 0, 100, self)
+            progress.setWindowTitle("重叠点检测")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.show()
+            progress.setValue(10)
             
-            # 用于存储边的出现次数
-            edge_count = {}
+            # 检查可用的C++模块
+            has_cpp = False
+            try:
+                import non_manifold_vertices_cpp
+                has_cpp = True
+                progress.setLabelText("使用C++算法检测重叠点（non_manifold_vertices_cpp模块）...")
+            except ImportError:
+                try:
+                    import overlapping_points_cpp
+                    has_cpp = True
+                    progress.setLabelText("使用C++算法检测重叠点（overlapping_points_cpp模块）...")
+                except ImportError:
+                    has_cpp = False
+                    progress.setLabelText("使用Python算法检测重叠点...")
+                    print("警告：未找到C++模块，将使用较慢的Python实现")
             
-            # 统计所有边的出现次数
-            progress.setValue(30)
-            for face in faces:
-                for i in range(len(face)):
-                    # 获取边的两个端点（按较小的点索引在前排序）
-                    p1, p2 = sorted([face[i], face[(i + 1) % len(face)]])
-                    edge = (p1, p2)
-                    edge_count[edge] = edge_count.get(edge, 0) + 1
-                    
-                    # 记录每个点连接的边
-                    point_edges[p1].append(edge)
-                    point_edges[p2].append(edge)
+            # 使用合并后的顶点检测算法
+            from algorithms.merged_vertex_detection_algorithm import MergedVertexDetectionAlgorithm
+            algorithm = MergedVertexDetectionAlgorithm(self.mesh_data, detection_mode="overlapping")
             
-            # 找出自由边（只出现一次的边）
-            progress.setValue(60)
-            free_edges = {edge for edge, count in edge_count.items() if count == 1}
+            # 强制使用C++实现（如果可用）
+            algorithm.use_cpp = has_cpp
             
-            # 检查每个点连接的自由边数量
-            overlapping_points = set()
-            progress.setValue(80)
+            # 执行算法
+            result = algorithm.execute(parent=self)
             
-            for point_idx, edges in point_edges.items():
-                if progress.wasCanceled():
-                    break
-                    
-                # 计算与该点相连的自由边数量
-                free_edge_count = sum(1 for edge in edges if edge in free_edges)
+            # 更新选择
+            if 'selected_points' in result and result['selected_points']:
+                self.selected_points = result['selected_points']
+                # 同时确保mesh_data中有相同的结果
+                self.mesh_data['non_manifold_vertices'] = self.selected_points.copy()
                 
-                # 如果自由边数量大于等于4且为偶数，则认为是重叠点
-                if free_edge_count >= 4 and free_edge_count % 2 == 0:
-                    overlapping_points.add(point_idx)
-            
-            # 更新选中的点
-            self.selected_points = list(overlapping_points)
-            
-            # 更新显示
-            progress.setValue(100)
-            self.update_display()
-            
-            # 检查是否找到了重叠点
-            if len(self.selected_points) > 0:
-                # 更新数字标签为实际数量
+                # 缓存结果
+                self.detection_cache['overlapping_points'] = self.selected_points.copy()
+                
+                # 更新显示
+                self.update_display()
                 self.adjust_font_size(self.overlap_point_count, str(len(self.selected_points)))
-            else:
-                # 如果没有找到，显示为0
-                self.adjust_font_size(self.overlap_point_count, "0")
-            
-            # 更新状态栏
-            if progress.wasCanceled():
-                self.statusBar.showMessage('重叠点检测已取消')
-            elif len(overlapping_points) > 0:
-                self.statusBar.showMessage(f'找到 {len(overlapping_points)} 个重叠点')
-            else:
-                self.statusBar.showMessage('未找到重叠点')
                 
-        finally:
-            progress.close()
+                # 显示结果
+                if not hasattr(algorithm, 'message_shown') or not algorithm.message_shown:
+                    total_points = len(self.mesh_data['vertices'])
+                    percentage = len(self.selected_points) / total_points * 100 if total_points > 0 else 0
+                    
+                    # 显示不同的消息，取决于使用的是哪种实现
+                    cpp_info = "C++算法" if algorithm.use_cpp else "Python算法"
+                    QMessageBox.information(
+                        self, "重叠点检测完成", 
+                        f"检测到 {len(self.selected_points)} 个重叠点，占总点数的 {percentage:.2f}%。\n已使用{cpp_info}"
+                    )
+                
+                # 在状态栏显示结果
+                cpp_info = "C++算法" if algorithm.use_cpp else "Python算法"
+                self.statusBar.showMessage(f"检测到 {len(self.selected_points)} 个重叠点 ({cpp_info})")
+            else:
+                self.clear_points()
+                self.adjust_font_size(self.overlap_point_count, "0")
+                
+                # 缓存结果（空列表）
+                self.detection_cache['overlapping_points'] = []
+                
+                if not hasattr(algorithm, 'message_shown') or not algorithm.message_shown:
+                    cpp_info = "C++算法" if algorithm.use_cpp else "Python算法"
+                    QMessageBox.information(self, "重叠点检测完成", f"未检测到重叠点。\n已使用{cpp_info}")
+                
+                # 在状态栏显示结果
+                cpp_info = "C++算法" if algorithm.use_cpp else "Python算法"
+                self.statusBar.showMessage(f"未检测到重叠点 ({cpp_info})")
+                
+            progress.setValue(100)
+            
+        except Exception as e:
+            import traceback
+            error_msg = f"重叠点检测失败: {str(e)}\n{traceback.format_exc()}"
+            QMessageBox.critical(self, "错误", error_msg)
+            self.statusBar.showMessage("重叠点检测失败")
 
     def toggle_performance_mode(self):
         """切换性能模式，在高性能和高质量模式之间切换"""
@@ -2323,63 +2691,48 @@ class MeshViewerQt(QMainWindow):
         mode_name = "高性能模式" if self.high_performance_mode else "高质量模式"
         self.setWindowTitle(f'Mesh Viewer - {mode_name}')
         
-        # 获取渲染窗口
-        render_window = self.vtk_widget.GetRenderWindow()
+        # 更新状态栏
+        self.statusBar.showMessage(f"已切换为{mode_name}")
         
-        if self.high_performance_mode:
-            # 切换到高性能模式
-            render_window.SetMultiSamples(0 if self.is_large_model else 2)  # 减少抗锯齿
-            self.renderer.SetUseDepthPeeling(0)  # 禁用深度剥离
-            try:
-                self.renderer.SetUseFXAA(0)  # 禁用FXAA
-            except AttributeError:
-                pass
-            
-            # 调整点显示
-            self.point_glyph_source = None  # 重置点显示源，强制重新创建
-            self.point_threshold = 200 if self.is_large_model else 500
-            
-            # 显示消息
-            self.statusBar.showMessage('已切换到高性能模式，优化渲染速度')
-        else:
-            # 切换到高质量模式
-            render_window.SetMultiSamples(4)  # 启用抗锯齿
-            self.renderer.SetUseDepthPeeling(1)  # 启用深度剥离提高质量
-            try:
-                self.renderer.SetUseFXAA(1)  # 启用FXAA
-            except AttributeError:
-                pass
-                
-            # 调整点显示
-            self.point_glyph_source = None  # 重置点显示源，强制重新创建
-            self.point_threshold = 500 if self.is_large_model else 2000
-            
-            # 显示消息
-            self.statusBar.showMessage('已切换到高质量模式，提高渲染效果')
-        
-        # 触发重新渲染
-        self.needs_high_res_render = True
+        # 更新渲染设置
         self.update_display()
 
     def keyPressEvent(self, event):
         """处理键盘事件"""
-        # 确保窗口有焦点
-        if not self.hasFocus():
-            self.setFocus()
-            return
+        # 各种选择模式的快捷键
+        if event.key() == Qt.Key_V:
+            self.set_selection_mode('point')
+        elif event.key() == Qt.Key_E:
+            self.set_selection_mode('edge')
+        elif event.key() == Qt.Key_F:
+            self.set_selection_mode('face')
             
-        print(f"Key pressed: {event.key()}, Text: {event.text()}")  # 添加调试信息
+        # 清除选择的快捷键
+        elif event.key() == Qt.Key_Escape:
+            self.clear_selection()
+            
+        # 删除选中面片的快捷键
+        elif event.key() == Qt.Key_Delete:
+            self.delete_selected_faces()
         
-        # 按P键切换性能模式
-        if event.key() == Qt.Key_P:
+        # 高性能/高质量模式切换
+        elif event.key() == Qt.Key_P:
             self.toggle_performance_mode()
-        # 按A键切换坐标轴显示
+        
+        # 坐标轴显示切换
         elif event.key() == Qt.Key_A:
             self.toggle_axes_visibility()
-        # 按D键删除选定面
-        elif event.key() == Qt.Key_D:
-            print("D key pressed, calling delete_selected_faces")  # 添加调试信息
-            self.delete_selected_faces()
+            
+        # 使用I键查看当前选中面片的相交关系
+        elif event.key() == Qt.Key_I:
+            if self.selection_mode == 'face' and len(self.selected_faces) == 1:
+                self.show_face_intersections(self.selected_faces[0])
+            elif self.selection_mode == 'face' and len(self.selected_faces) > 1:
+                QMessageBox.information(self, "信息", "请仅选择一个面片来查看其相交关系。")
+            else:
+                QMessageBox.information(self, "信息", "请先选择一个面片。")
+        
+        # 其他键保持默认处理
         else:
             super().keyPressEvent(event)
 
@@ -2553,45 +2906,88 @@ class MeshViewerQt(QMainWindow):
         self.vtk_widget.GetRenderWindow().Render()
 
     def update_model_analysis(self):
-        """当模型变化时重新进行各种分析"""
-        # 只在模型发生实际变化时调用此方法
+        """更新模型分析"""
+        # 使用新的局部检测优化算法
+        if hasattr(self, 'model_tracker'):
+            # 如果是初次分析，先初始化缓存
+            if self.model_modified:
+                self.model_tracker.initialize_cache()
+            
+            # 执行增量更新
+            updates = self.model_tracker.update_analysis()
+            
+            # 根据更新结果调整界面显示
+            if updates:
+                if hasattr(self, 'intersection_count') and '交叉面' in updates:
+                    count = self.model_tracker.get_button_counts()['交叉面']
+                    self.adjust_font_size(self.intersection_count, str(count))
+                
+                if hasattr(self, 'quality_count') and '面质量' in updates:
+                    count = self.model_tracker.get_button_counts()['面质量']
+                    self.adjust_font_size(self.quality_count, str(count))
+                
+                if hasattr(self, 'free_edge_count') and '自由边' in updates:
+                    count = self.model_tracker.get_button_counts()['自由边']
+                    self.adjust_font_size(self.free_edge_count, str(count))
+                
+                if hasattr(self, 'overlap_edge_count') and '重叠边' in updates:
+                    count = self.model_tracker.get_button_counts()['重叠边']
+                    self.adjust_font_size(self.overlap_edge_count, str(count))
+                
+                if hasattr(self, 'overlap_point_count') and '重叠点' in updates:
+                    count = self.model_tracker.get_button_counts()['重叠点']
+                    self.adjust_font_size(self.overlap_point_count, str(count))
+                
+                # 更新界面显示
+                self.update_display()
+            
+            # 清除模型修改标记
+            self.model_modified = False
+            
+            # 在状态栏显示性能统计
+            stats = self.model_tracker.get_performance_stats()
+            self.statusBar.showMessage(f"分析完成: 局部更新 {stats['local_updates']} 次, 全局更新 {stats['full_updates']} 次, 估计节省时间 {stats['time_saved']:.2f} 秒")
+            
+            return
+            
+        # 旧的全局检测算法（仅在模型变更追踪器不可用时使用）
+        # 重置模型修改状态，表示此次分析之后模型处于未修改状态
+        self.model_modified = False
         
-        # 记录之前的分析状态
-        had_intersection_analysis = self.intersection_count.text() != "未分析"
-        had_quality_analysis = self.quality_count.text() != "未分析"  
-        had_proximity_analysis = self.proximity_count.text() != "未分析"
-        had_free_edge_analysis = self.free_edge_count.text() != "未分析"
-        had_overlap_edge_analysis = self.overlap_edge_count.text() != "未分析"
-        had_overlap_point_analysis = self.overlap_point_count.text() != "未分析"
+        # 检查模型是否足够小以便进行分析
+        if not self.mesh_data or 'faces' not in self.mesh_data or len(self.mesh_data['faces']) > 100000:
+            # 模型太大，不进行自动分析
+            return
         
-        # 如果之前进行过分析，则重新运行对应的检测
-        if had_intersection_analysis:
-            # 静默运行交叉面检测（不显示进度条和消息）
-            self.run_silent_detection(self.detect_face_intersections, "交叉面")
-            
-        if had_quality_analysis:
-            # 静默运行面质量检测
-            self.run_silent_detection(self.analyze_face_quality, "面质量")
-            
-        if had_proximity_analysis:
-            # 静默运行相邻面检测
-            self.run_silent_detection(self.select_adjacent_faces, "相邻面")
-            
+        # 静默运行各种检测，而不显示进度条和结果消息
+        had_free_edge_analysis = hasattr(self, 'free_edge_count')
+        had_overlap_edge_analysis = hasattr(self, 'overlap_edge_count')
+        had_intersection_analysis = hasattr(self, 'intersection_count')
+        had_quality_analysis = hasattr(self, 'quality_count')
+        had_proximity_analysis = hasattr(self, 'proximity_count')
+        had_overlap_point_analysis = hasattr(self, 'overlap_point_count')
+        
+        # 根据先前的分析结果，决定要运行哪些分析
         if had_free_edge_analysis:
             # 静默运行自由边检测
-            temp_edges = self.selected_edges.copy()  # 备份当前选择
-            self.select_free_edges()  # 运行检测
-            # 还原之前的选择状态
-            selection = self.selected_edges.copy()  # 保存检测结果
-            self.selected_edges = temp_edges  # 还原选择
-            self.update_display()
-            # 只更新标签，不改变当前选择
-            self.adjust_font_size(self.free_edge_count, str(len(selection)))
-            
+            self.run_silent_detection(self.select_free_edges, "自由边")
+        
         if had_overlap_edge_analysis:
             # 静默运行重叠边检测
             self.run_silent_detection(self.select_overlapping_edges, "重叠边")
-            
+        
+        if had_intersection_analysis:
+            # 静默运行交叉面检测
+            self.run_silent_detection(self.detect_face_intersections, "交叉面")
+        
+        if had_quality_analysis:
+            # 静默运行面片质量分析
+            self.run_silent_detection(self.analyze_face_quality, "面质量")
+        
+        if had_proximity_analysis:
+            # 静默运行相邻面分析
+            self.run_silent_detection(self.select_adjacent_faces, "相邻面")
+        
         if had_overlap_point_analysis:
             # 静默运行重叠点检测
             self.run_silent_detection(self.select_overlapping_points, "重叠点")
@@ -2600,39 +2996,311 @@ class MeshViewerQt(QMainWindow):
         """静默运行检测函数（不显示进度条和消息）"""
         try:
             # 备份当前选择状态
-            temp_faces = self.selected_faces.copy()
-            temp_edges = self.selected_edges.copy()
-            temp_points = self.selected_points.copy()
+            temp_faces = self.selected_faces.copy() if self.selected_faces else []
+            temp_edges = self.selected_edges.copy() if self.selected_edges else []
+            temp_points = self.selected_points.copy() if self.selected_points else []
             
-            # 运行检测函数
-            detection_func()
+            # 根据检测类型创建并执行相应的算法
+            if detection_type == "自由边":
+                algorithm = FreeEdgesAlgorithm(self.mesh_data)
+                # 使用None作为parent参数，避免显示消息对话框
+                result = algorithm.execute(parent=None)
+                if 'selected_edges' in result:
+                    selection = result['selected_edges']
+                    self.adjust_font_size(self.free_edge_count, str(len(selection)))
             
-            # 备份检测结果
-            if detection_type in ["交叉面", "面质量", "相邻面"]:
-                selection = self.selected_faces.copy()
-            elif detection_type in ["自由边", "重叠边"]:
-                selection = self.selected_edges.copy()
+            elif detection_type == "重叠边":
+                algorithm = OverlappingEdgesAlgorithm(self.mesh_data)
+                result = algorithm.execute(parent=None)
+                if 'selected_edges' in result:
+                    selection = result['selected_edges']
+                    self.adjust_font_size(self.overlap_edge_count, str(len(selection)))
+            
+            elif detection_type == "交叉面":
+                algorithm = CombinedIntersectionAlgorithm(self.mesh_data)
+                result = algorithm.execute(parent=None)
+                if 'selected_faces' in result:
+                    selection = result['selected_faces']
+                    self.adjust_font_size(self.intersection_count, str(len(selection)))
+            
+            elif detection_type == "面质量":
+                # 尝试导入并使用C++模块
+                try:
+                    import face_quality_cpp
+                    has_cpp = True
+                except ImportError:
+                    has_cpp = False
+                
+                # 创建算法实例并明确设置是否使用C++
+                algorithm = FaceQualityAlgorithm(self.mesh_data)
+                algorithm.use_cpp = has_cpp  # 明确设置使用C++
+                
+                # 执行算法
+                result = algorithm.execute(parent=None)
+                
+                # 更新界面显示
+                if 'selected_faces' in result:
+                    selection = result['selected_faces']
+                    self.adjust_font_size(self.quality_count, str(len(selection)))
+                    
+                    # 在状态栏显示使用的算法类型
+                    if has_cpp:
+                        self.statusBar.showMessage(f"面质量检测完成 (C++算法)")
+                    else:
+                        self.statusBar.showMessage(f"面质量检测完成 (Python算法)")
+            
+            elif detection_type == "相邻面":
+                # 检查可用的C++模块
+                has_cpp = False
+                try:
+                    import self_intersection_cpp
+                    has_cpp = True
+                except ImportError:
+                    has_cpp = False
+                    print("警告：静默检测未找到相邻面检测C++模块，将使用较慢的Python实现")
+                
+                # 创建算法并强制使用C++实现（如果可用）
+                algorithm = CombinedIntersectionAlgorithm(self.mesh_data, detection_mode="adjacent")
+                algorithm.use_cpp = has_cpp  # 强制使用C++实现（如果可用）
+                
+                result = algorithm.execute(parent=None)
+                if 'selected_faces' in result:
+                    selection = result['selected_faces']
+                    self.adjust_font_size(self.proximity_count, str(len(selection)))
+                    
+                    # 在状态栏显示使用的算法类型
+                    if has_cpp:
+                        self.statusBar.showMessage(f"相邻面检测完成 (C++高性能算法)")
+                    else:
+                        self.statusBar.showMessage(f"相邻面检测完成 (Python算法)")
+            
             elif detection_type == "重叠点":
-                selection = self.selected_points.copy()
+                # 检查可用的C++模块
+                has_cpp = False
+                try:
+                    import non_manifold_vertices_cpp
+                    has_cpp = True
+                except ImportError:
+                    try:
+                        import overlapping_points_cpp
+                        has_cpp = True
+                    except ImportError:
+                        has_cpp = False
+                        print("警告：静默检测未找到C++模块，将使用较慢的Python实现")
+                
+                # 使用合并后的顶点检测算法
+                from algorithms.merged_vertex_detection_algorithm import MergedVertexDetectionAlgorithm
+                algorithm = MergedVertexDetectionAlgorithm(self.mesh_data, detection_mode="overlapping")
+                
+                # 强制使用C++实现（如果可用）
+                algorithm.use_cpp = has_cpp
+                
+                # 执行算法
+                result = algorithm.execute(parent=None)
+                
+                # 获取检测结果
+                if 'selected_points' in result and result['selected_points']:
+                    selection = result['selected_points']
+                    self.adjust_font_size(self.overlap_point_count, str(len(selection)))
             
             # 还原之前的选择状态
             self.selected_faces = temp_faces
             self.selected_edges = temp_edges
             self.selected_points = temp_points
             self.update_display()
-            
-            # 根据检测类型更新对应标签
-            if detection_type == "交叉面":
-                self.adjust_font_size(self.intersection_count, str(len(selection)))
-            elif detection_type == "面质量":
-                self.adjust_font_size(self.quality_count, str(len(selection)))
-            elif detection_type == "相邻面":
-                self.adjust_font_size(self.proximity_count, str(len(selection)))
-            elif detection_type == "重叠边":
-                self.adjust_font_size(self.overlap_edge_count, str(len(selection)))
-            elif detection_type == "重叠点":
-                self.adjust_font_size(self.overlap_point_count, str(len(selection)))
                 
         except Exception as e:
             # 静默捕获异常，不显示错误消息
             print(f"静默检测时发生错误: {detection_type} - {str(e)}")
+
+    def mark_model_modified(self):
+        """标记模型已修改，并追踪变更"""
+        self.model_modified = True
+        self.detection_cache = {k: None for k in self.detection_cache}
+        
+        # 如果有模型变更追踪器，则记录当前修改的元素
+        if hasattr(self, 'model_tracker'):
+            # 从当前选择中获取修改的元素ID
+            if self.selected_points:
+                self.model_tracker.track_modification('points', self.selected_points)
+            if self.selected_edges:
+                self.model_tracker.track_modification('edges', self.selected_edges)
+            if self.selected_faces:
+                self.model_tracker.track_modification('faces', self.selected_faces)
+        
+        print("模型已修改，检测缓存已清除")
+
+    def toggle_checkbox(self, index):
+        """切换复选框状态"""
+        self.toggle_states[index] = not self.toggle_states[index]
+        # 更新按钮外观
+        sender = self.sender()
+        if self.toggle_states[index]:
+            sender.setText("✓")
+        else:
+            sender.setText("")
+        
+        # 这里只是切换状态，后续可以添加实际功能
+        print(f"切换按钮 {index} 状态变为: {self.toggle_states[index]}")
+
+    def handle_nav_button(self, index):
+        """处理导航按钮点击"""
+        # 导航按钮名称列表，用于输出信息
+        nav_names = ["首个", "上一个", "下一个", "末个"]
+        
+        # 临时变色反馈，然后恢复原色
+        sender = self.sender()
+        original_style = sender.styleSheet()
+        
+        # 设置点击反馈样式（临时变色）
+        sender.setStyleSheet("""
+            QPushButton {
+                background-color: #aaddff;
+                color: #333333;
+                border: 1px solid #3399ff;
+                border-radius: 4px;
+                padding: 2px;
+            }
+        """)
+        
+        # 打印操作信息
+        print(f"点击了{nav_names[index]}导航按钮")
+        
+        # 使用计时器在短暂延迟后恢复按钮样式
+        QTimer.singleShot(200, lambda: sender.setStyleSheet(original_style))
+        
+        # 实际功能可以在此处添加
+
+    def toggle_function_button(self, index):
+        """切换功能按钮状态"""
+        self.function_button_states[index] = not self.function_button_states[index]
+        
+        # 更新按钮样式
+        sender = self.sender()
+        
+        if self.function_button_states[index]:
+            # 激活状态 - 绿色
+            sender.setStyleSheet("""
+                QPushButton {
+                    background-color: #90EE90;  /* 浅绿色 */
+                    color: #006400;  /* 深绿色文字 */
+                    border: 1px solid #2E8B57;  /* 海绿色边框 */
+                    border-radius: 4px;
+                    padding: 2px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #7CFC00;  /* 草绿色悬停 */
+                    border-color: #006400;
+                }
+            """)
+        else:
+            # 未激活状态 - 灰色
+            sender.setStyleSheet("""
+                QPushButton {
+                    background-color: #f0f0f0;  /* 浅灰色 */
+                    color: #333333;  /* 深灰色文字 */
+                    border: 1px solid #999999;  /* 灰色边框 */
+                    border-radius: 4px;
+                    padding: 2px;
+                }
+                QPushButton:hover {
+                    background-color: #e0e0e0;  /* 稍深灰色悬停 */
+                    border-color: #666666;
+                }
+            """)
+        
+        # 打印状态信息
+        button_names = ["Reset View", "Rest Displayed"]
+        status = "激活" if self.function_button_states[index] else "未激活"
+        print(f"{button_names[index]} 按钮状态: {status}")
+
+    def show_face_intersections(self, face_idx):
+        """显示指定面片的所有相交面片"""
+        if not hasattr(self, 'face_intersection_map') or not self.face_intersection_map:
+            QMessageBox.information(self, "信息", "没有可用的面片相交关系数据，请先运行相交检测。")
+            return
+        
+        face_idx = int(face_idx)  # 确保是整数
+        if face_idx not in self.face_intersection_map:
+            QMessageBox.information(self, "信息", f"面片 #{face_idx} 没有相交关系。")
+            return
+        
+        # 获取与当前面片相交的所有面片
+        intersecting_faces = self.face_intersection_map[face_idx]
+        
+        # 高亮显示这些面片
+        self.selected_faces = [face_idx] + list(intersecting_faces)
+        self.update_display()
+        
+        # 显示信息
+        QMessageBox.information(
+            self, 
+            "面片相交关系", 
+            f"面片 #{face_idx} 与以下 {len(intersecting_faces)} 个面片相交：\n{', '.join(map(str, sorted(intersecting_faces)))}"
+        )
+
+    def toggle_face_selection(self, face_id):
+        """切换面片选择状态"""
+        if face_id in self.selected_faces:
+            self.selected_faces.remove(face_id)
+            self.statusBar.showMessage(f'取消选择面 {face_id}')
+        else:
+            self.selected_faces.append(face_id)
+            self.statusBar.showMessage(f'选择面 {face_id}')
+        self.update_display()
+    
+    def delete_face(self, face_id):
+        """删除指定的面片"""
+        if face_id < 0 or face_id >= len(self.mesh_data['faces']):
+            return
+            
+        # 从选择中移除
+        if face_id in self.selected_faces:
+            self.selected_faces.remove(face_id)
+            
+        # 记录要删除的面片
+        face_to_delete = self.mesh_data['faces'][face_id]
+        
+        # 从模型中删除面片
+        self.mesh_data['faces'] = np.delete(self.mesh_data['faces'], face_id, axis=0)
+        
+        # 更新大于被删除面片索引的已选择面片
+        self.selected_faces = [f if f < face_id else f - 1 for f in self.selected_faces]
+        
+        # 标记模型已修改
+        self.mark_model_modified()
+        
+        # 更新相交关系映射
+        if hasattr(self, 'face_intersection_map') and self.face_intersection_map:
+            # 移除被删除面的相交关系
+            if face_id in self.face_intersection_map:
+                del self.face_intersection_map[face_id]
+                
+            # 更新其他面的相交关系
+            updated_map = {}
+            for f, intersections in self.face_intersection_map.items():
+                # 调整大于被删除面的索引
+                new_f = f if f < face_id else f - 1
+                
+                # 从相交列表中移除被删除的面
+                new_intersections = set()
+                for i in intersections:
+                    if i != face_id:  # 不包含被删除的面
+                        new_i = i if i < face_id else i - 1
+                        new_intersections.add(new_i)
+                        
+                updated_map[new_f] = new_intersections
+                
+            self.face_intersection_map = updated_map
+        
+        # 更新缓存，使其失效
+        self.detection_cache['face_intersections'] = None
+        self.detection_cache['face_intersection_map'] = None
+        
+        # 更新显示
+        self.update_display()
+        self.statusBar.showMessage(f'已删除面 {face_id}')
+        
+        # 更新模型分析
+        self.update_model_analysis()

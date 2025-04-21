@@ -1,0 +1,31 @@
+Detecting adjacent faces, threshold: 0.3
+Starting adjacent face detection...
+Checking 15 faces, threshold: 0.3
+Detection completed, found 2 adjacent pairs out of 105 pairs checked
+Execution time: 0.000175 seconds
+C++模块已加载
+已加载C++重叠边检测模块
+C++模块已加载
+测试网格: 17 个顶点, 15 个面片
+
+=== 执行C++实现 ===
+C++使用阈值: 0.3
+C++检测的相邻对:
+  对 1: (6, 14)
+  对 2: (12, 13)
+C++检测到 4 个相邻面，来自 2 对
+C++检测到的面片: [6, 12, 13, 14]
+C++执行时间: 0.000175秒
+
+=== 执行Python实现 ===
+Python使用阈值: 0.3
+Python检测到 4 个相邻面（来自 2 对）
+Python检测到的相邻对: [(6, 14), (12, 13)]
+Python检测到的面片: [6, 12, 13, 14]
+Python执行时间: 0.002991秒
+
+=== 结果比较 ===
+没有仅在C++中检测到的面片
+没有仅在Python中检测到的面片
+两种方法共同检测到的面片 (4个): [6, 12, 13, 14]
+一致率: 100.00%
