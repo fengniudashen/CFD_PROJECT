@@ -79,42 +79,55 @@ class MergedVertexDetectionAlgorithm(BaseAlgorithm):
         try:
             # 检查网格数据
             if not self.set_mesh_data(self.mesh_data):
-                self.show_message(parent, "警告", "缺少有效的网格数据", icon="warning")
+                # 仅在 parent 存在时显示警告
+                if parent:
+                    self.show_message(parent, "警告", "缺少有效的网格数据", icon="warning")
                 return self.result
             
-            # 显示进度对话框
-            progress = self.show_progress_dialog(parent, "顶点检测", "正在检测重叠点...", 100)
-            self.update_progress(10, "初始化检测...")
-            
-            start_time = time.time()
+            # 只有在 parent 不为 None 时才显示进度对话框
+            progress = None
             detection_title = "重叠点检测" if self.detection_mode == "overlapping" else "非流形顶点检测"
+            if parent:
+                progress = self.show_progress_dialog(parent, detection_title, f"正在{detection_title}...", 100)
+                if progress: self.update_progress(10, "初始化检测...")
+
+            start_time = time.time()
             
             # 尝试使用C++实现
             if self.use_cpp:
                 cpp_module_name = self.cpp_module
-                self.update_progress(20, f"使用C++算法检测 ({cpp_module_name})...")
+                if progress: self.update_progress(20, f"使用C++算法检测 ({cpp_module_name})...")
                 
+                result = [] # 初始化结果
+                detection_time = 0 # 初始化时间
+
                 if cpp_module_name == "overlapping_points_cpp" and HAS_OVERLAPPING_POINTS_CPP:
-                    result, detection_time = overlapping_points_cpp.detect_overlapping_points_with_timing(
+                    cpp_result = overlapping_points_cpp.detect_overlapping_points_with_timing(
                         self.vertices, self.faces)
-                    # 存储结果到两个位置以保持兼容性
-                    self.result['selected_points'] = list(result)
-                    self.mesh_data['non_manifold_vertices'] = list(result)
-                    
+                    if isinstance(cpp_result, tuple) and len(cpp_result) == 2:
+                        result, detection_time = cpp_result
+                    else:
+                        print("Warning: overlapping_points_cpp returned unexpected format.")
+
                 elif cpp_module_name == "non_manifold_vertices_cpp" and HAS_NON_MANIFOLD_VERTICES_CPP:
-                    result, detection_time = non_manifold_vertices_cpp.detect_non_manifold_vertices_with_timing(
+                    cpp_result = non_manifold_vertices_cpp.detect_non_manifold_vertices_with_timing(
                         self.vertices, self.faces, self.tolerance)
-                    # 存储结果到两个位置以保持兼容性
-                    self.result['selected_points'] = list(result)
-                    self.mesh_data['non_manifold_vertices'] = list(result)
+                    if isinstance(cpp_result, tuple) and len(cpp_result) == 2:
+                         result, detection_time = cpp_result
+                    else:
+                        print("Warning: non_manifold_vertices_cpp returned unexpected format.")
+
+                # 存储结果到两个位置以保持兼容性
+                self.result['selected_points'] = list(result)
+                self.mesh_data['non_manifold_vertices'] = list(result)
                 
                 total_time = time.time() - start_time
                 self.message = f"检测到{len(result)}个{detection_title}\nC++算法用时: {detection_time:.4f}秒 (总用时: {total_time:.4f}秒)"
             
             else:
                 # 使用Python实现
-                self.update_progress(20, "使用Python算法检测...")
-                self.detect_overlapping_points_python()
+                if progress: self.update_progress(20, "使用Python算法检测...")
+                self.detect_overlapping_points_python(progress)
                 
                 total_time = time.time() - start_time
                 result_points = self.result.get('selected_points', [])
@@ -123,8 +136,8 @@ class MergedVertexDetectionAlgorithm(BaseAlgorithm):
                 
                 self.message = f"检测到{len(result_points)}个{detection_title}\nPython算法用时: {total_time:.4f}秒"
             
-            self.update_progress(100)
-            self.close_progress_dialog()
+            if progress: self.update_progress(100)
+            if progress: self.close_progress_dialog()
             
             if parent:
                 self.show_message(parent, f"{detection_title}完成", self.message)
@@ -134,12 +147,18 @@ class MergedVertexDetectionAlgorithm(BaseAlgorithm):
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.close_progress_dialog()
+            # 关闭进度条（如果存在）
+            if progress: self.close_progress_dialog()
             if parent:
                 self.show_message(parent, "错误", f"{detection_title}失败: {str(e)}", icon="critical")
+            # 确保返回默认结果
+            if self.result is None:
+                 self.result = {'selected_points': []}
+            elif 'selected_points' not in self.result:
+                 self.result['selected_points'] = []
             return self.result
     
-    def detect_overlapping_points_python(self):
+    def detect_overlapping_points_python(self, progress=None):
         """
         使用Python算法检测重叠点/非流形顶点
         
@@ -151,7 +170,7 @@ class MergedVertexDetectionAlgorithm(BaseAlgorithm):
         # 用于存储边的出现次数
         edge_count = {}
         
-        self.update_progress(20, "统计边的出现次数...")
+        if progress: self.update_progress(20, "统计边的出现次数...")
         
         # 统计所有边的出现次数
         for face in self.faces:
@@ -161,11 +180,13 @@ class MergedVertexDetectionAlgorithm(BaseAlgorithm):
                 edge = (p1, p2)
                 edge_count[edge] = edge_count.get(edge, 0) + 1
                 
-                # 记录每个点连接的边
-                point_edges[p1].append(edge)
-                point_edges[p2].append(edge)
+                # 记录每个点连接的边 (避免重复添加)
+                if edge not in point_edges[p1]:
+                    point_edges[p1].append(edge)
+                if edge not in point_edges[p2]:
+                    point_edges[p2].append(edge)
         
-        self.update_progress(60, "找出自由边和重叠点...")
+        if progress: self.update_progress(60, "找出自由边和重叠点...")
         
         # 找出自由边（只出现一次的边）
         free_edges = {edge for edge, count in edge_count.items() if count == 1}
@@ -178,9 +199,10 @@ class MergedVertexDetectionAlgorithm(BaseAlgorithm):
         check_vertices = self.target_vertices if self.target_vertices is not None else range(total_points)
         
         for point_idx in check_vertices:
-            if point_idx % 100 == 0:
-                progress = 60 + int(35 * point_idx / total_points)
-                self.update_progress(progress, f"检查点 {point_idx}/{total_points}")
+            # 更新进度 (仅在 progress 存在时)
+            if progress and point_idx % 100 == 0:
+                progress_val = 60 + int(35 * point_idx / total_points)
+                self.update_progress(progress_val, f"检查点 {point_idx}/{total_points}")
                 if self.progress_dialog and self.progress_dialog.wasCanceled():
                     break
             
@@ -191,8 +213,10 @@ class MergedVertexDetectionAlgorithm(BaseAlgorithm):
             if free_edge_count >= 4:
                 overlapping_points.add(point_idx)
         
-        self.update_progress(95, "整理结果...")
+        if progress: self.update_progress(95, "整理结果...")
         
         # 更新结果
+        if self.result is None:
+            self.result = {}
         self.result['selected_points'] = list(overlapping_points)
         return self.result 

@@ -1,8 +1,8 @@
-# API参考文档 (V0.0.9)
+# API参考文档 (V0.1.2)
 
-*更新日期: 2024-06-16*
+*更新日期: 2024-07-27*
 
-本文档提供了CFD网格处理工具V0.0.9版本中核心函数的详细说明和使用方法。
+本文档提供了CFD网格处理工具V0.1.2版本中核心类和函数的说明和使用方法。
 
 ## 网格生成模块 (create_football_mesh.py)
 
@@ -65,95 +65,40 @@ vertices, faces, normals = create_football_mesh(radius=100.0, subdivisions=3)
 save_to_stl('data/football.stl', vertices, faces, normals)
 ```
 
-## 穿刺面检测模块 (pierced_faces_cpp)
+## 算法模块 (src/algorithms/)
 
-### `detect_pierced_faces_with_timing(faces, vertices)`
+### `CombinedIntersectionAlgorithm` 类 (combined_intersection_algorithm.py)
 
-使用高性能C++算法检测网格中的穿刺面（相交面），并返回检测时间。
+组合的网格相交检测算法类，目前专注于穿刺面检测。
 
-**参数**：
-- `faces (np.ndarray)`：面片索引数组，形状为(num_faces, 3)，数据类型为int
-- `vertices (np.ndarray)`：顶点坐标数组，形状为(num_vertices, 3)，数据类型为float或double
-
-**返回值**：
-- `Tuple[List[int], float]`：包含检测到的穿刺面索引列表和检测用时(秒)的元组
-
-**示例**：
+**构造函数**：
 ```python
-import pierced_faces_cpp
-pierced_faces, detection_time = pierced_faces_cpp.detect_pierced_faces_with_timing(faces, vertices)
-print(f"检测到{len(pierced_faces)}个穿刺面，用时{detection_time:.4f}秒")
+CombinedIntersectionAlgorithm(mesh_data=None, detection_mode="pierced")
 ```
 
-### `detect_pierced_faces(faces, vertices)`
+**主要方法**：
 
-使用高性能C++算法检测网格中的穿刺面（相交面），不返回检测时间。
+#### `execute(parent=None, threshold=None)`
+执行网格相交检测，根据 `detection_mode` 调用相应方法。
 
-**参数**：
-- `faces (np.ndarray)`：面片索引数组，形状为(num_faces, 3)，数据类型为int
-- `vertices (np.ndarray)`：顶点坐标数组，形状为(num_vertices, 3)，数据类型为float或double
+#### `detect_pierced_faces(parent=None)`
+检测穿刺面，会尝试使用 C++ 加速（如果可用），否则回退到 Python 实现。支持通过 `parent` 参数显示进度对话框。
 
-**返回值**：
-- `List[int]`：检测到的穿刺面索引列表
+### `AdjacentFacesAlgorithm` 类 (adjacent_faces_detector.py / adjacent_faces_detector.cpp)
 
-**示例**：
+检测相邻面片的算法。
+
+**构造函数**：
 ```python
-import pierced_faces_cpp
-pierced_faces = pierced_faces_cpp.detect_pierced_faces(faces, vertices)
-print(f"检测到{len(pierced_faces)}个穿刺面")
+AdjacentFacesAlgorithm(mesh_data=None, threshold=0.1)
 ```
 
-## 算法性能对比模块 (example_compare_methods.py)
+**主要方法**：
 
-### `create_intersecting_model(num_faces=1000)`
+#### `execute(parent=None, threshold=None)`
+执行相邻面检测。C++ 版本使用 Proximity 公式。
 
-创建一个包含穿刺面的测试模型。
-
-**参数**：
-- `num_faces (int, 可选)`：模型中的面片数量，默认为1000
-
-**返回值**：
-- `Tuple[np.ndarray, np.ndarray]`：包含顶点坐标和面片索引的元组
-
-**示例**：
-```python
-from src.example_compare_methods import create_intersecting_model
-vertices, faces = create_intersecting_model(num_faces=500)
-```
-
-### `detect_pierced_faces_python(faces, vertices)`
-
-使用Python算法检测网格中的穿刺面。
-
-**参数**：
-- `faces (np.ndarray)`：面片索引数组
-- `vertices (np.ndarray)`：顶点坐标数组
-
-**返回值**：
-- `Tuple[List[int], float]`：包含检测到的穿刺面索引列表和检测用时(秒)的元组
-
-**示例**：
-```python
-from src.example_compare_methods import detect_pierced_faces_python
-py_results, py_time = detect_pierced_faces_python(faces, vertices)
-```
-
-### `detect_pierced_faces_cpp(faces, vertices)`
-
-使用C++算法检测网格中的穿刺面，是对pierced_faces_cpp模块的封装。
-
-**参数**：
-- `faces (np.ndarray)`：面片索引数组
-- `vertices (np.ndarray)`：顶点坐标数组
-
-**返回值**：
-- `Tuple[List[int], float]`：包含检测到的穿刺面索引列表和检测用时(秒)的元组
-
-**示例**：
-```python
-from src.example_compare_methods import detect_pierced_faces_cpp
-cpp_results, cpp_time = detect_pierced_faces_cpp(faces, vertices)
-```
+*(其他算法类如 FreeEdgesAlgorithm, OverlappingEdgesAlgorithm, FaceQualityAlgorithm, MergedVertexDetectionAlgorithm 可类似添加)*
 
 ## 网格可视化模块 (mesh_viewer_qt.py)
 
@@ -163,7 +108,7 @@ cpp_results, cpp_time = detect_pierced_faces_cpp(faces, vertices)
 
 **构造函数**：
 ```python
-MeshViewerQt(mesh_data, parent=None)
+MeshViewerQt(mesh_data: Dict)
 ```
 
 **参数**：
@@ -171,60 +116,50 @@ MeshViewerQt(mesh_data, parent=None)
   - `vertices (np.ndarray)`：顶点坐标数组
   - `faces (np.ndarray)`：面片索引数组
   - `normals (np.ndarray, 可选)`：顶点法向量数组
-- `parent (QWidget, 可选)`：父窗口
 
-**主要方法**：
+**主要方法 (部分)**：
 
 #### `show()`
-
 显示可视化窗口。
 
-**示例**：
-```python
-viewer = MeshViewerQt(mesh_data)
-viewer.show()
-```
-
 #### `load_mesh(mesh_data)`
-
 加载新的网格数据。
 
-**参数**：
-- `mesh_data (dict)`：包含vertices、faces和可选的normals的字典
+#### `update_display()`
+根据当前的网格数据和选择状态更新 VTK 显示。
 
-**示例**：
-```python
-viewer.load_mesh({
-    'vertices': new_vertices,
-    'faces': new_faces
-})
-```
+#### `clear_all_selections()`
+清除所有当前的选择（点、边、面）。
 
-### `detect_face_intersections()`
+#### **选择操作 (通过 UI 按钮触发)**:
+*   `on_pick(obj, event)`: 处理鼠标点击拾取事件，根据当前激活的选择模式（点/边/面）更新选择集。
+*   `select_free_edges()`: 检测并高亮显示自由边。
+*   `select_overlapping_edges()`: 检测并高亮显示重叠边。
+*   `select_overlapping_points()`: 检测并高亮显示重叠点。
+*   `detect_face_intersections()`: 检测并高亮显示相交面（穿刺面）。
+*   `analyze_face_quality()`: 分析并根据阈值高亮显示低质量面。
+*   `select_adjacent_faces()`: 分析并根据阈值高亮显示相邻过近的面。
 
-使用高性能C++算法（如果可用）检测网格中的交叉面，并在界面中显示。
+#### **编辑操作 (通过 UI 按钮触发)**:
+*   `create_point()`: 通过输入的 X, Y, Z 坐标创建新顶点。
+*   `create_face()`: 从当前选中的3个顶点创建新面片。
+*   `delete_selected_faces()`: 删除当前选中的面片。
+*   `collapse_selected_vertices()`: 将选中的顶点（或选中边的端点）合并到它们的质心。
+*   `start_interactive_face_creation(checked)`: 启动或停止交互式面片创建模式。
+*   `finalize_interactive_face_creation()`: 完成交互式面片创建。
+*   `split_selected_elements()`: (占位符) 分割选中的边或面。
+*   `swap_selected_edge()`: (占位符) 交换选中的边。
 
-**示例**：
-```python
-viewer = MeshViewerQt(mesh_data)
-viewer.detect_face_intersections()  # 检测并显示交叉面
-```
+#### **内部 UI 控制方法**:
+*   `_toggle_create_point_options()`: 切换"创建点"的二级选项（"从三坐标创建点"按钮和输入框容器）的可见性。
+*   `_toggle_xyz_input_ui()`: 切换 XYZ 坐标输入框和"创建"按钮的可见性。
 
-### `check_triangle_intersection(tri1_verts, tri2_verts)`
+#### **其他常用方法**:
+*   `reset_camera()`: 重置相机视图。
+*   `set_standard_view(view_type)`: 设置标准视图 (front, back, top, bottom, left, right, isometric)。
 
-检测两个三角形是否相交的底层函数。
-
-**参数**：
-- `tri1_verts (np.ndarray)`：第一个三角形的三个顶点坐标，形状为(3, 3)
-- `tri2_verts (np.ndarray)`：第二个三角形的三个顶点坐标，形状为(3, 3)
-
-**返回值**：
-- `bool`：如果两个三角形相交则返回True，否则返回False
-
-**示例**：
-```python
-is_intersecting = viewer.check_triangle_intersection(triangle1_vertices, triangle2_vertices)
-```
+### `check_triangle_intersection(tri1_verts, tri2_verts)` 
+*(该方法似乎已移至 AlgorithmUtils 或不再直接暴露在 MeshViewerQt 中，建议确认)*
 
 ## 示例模块 (example_football.py)
 

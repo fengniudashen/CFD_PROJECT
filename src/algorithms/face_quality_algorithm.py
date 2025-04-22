@@ -43,11 +43,13 @@ class FaceQualityAlgorithm(BaseAlgorithm):
             self.threshold = threshold
             
         if not self.set_mesh_data(self.mesh_data):
-            self.show_message(parent, "警告", "缺少有效的网格数据", icon="warning")
+            if parent:
+                self.show_message(parent, "警告", "缺少有效的网格数据", icon="warning")
             return self.result
         
-        # 显示进度对话框
-        progress = self.show_progress_dialog(parent, "面片质量分析", "正在分析面片质量...", 100)
+        progress = None
+        if parent:
+            progress = self.show_progress_dialog(parent, "面片质量分析", "正在分析面片质量...", 100)
         
         start_time = time.time()
         cpp_success = False
@@ -55,15 +57,15 @@ class FaceQualityAlgorithm(BaseAlgorithm):
         try:
             # 尝试使用C++实现
             if self.use_cpp and HAS_CPP_MODULE:
-                self.update_progress(10, "使用C++算法分析面片质量...")
+                if progress: self.update_progress(10, "使用C++算法分析面片质量...")
                 try:
                     # 调用C++实现
                     low_quality_faces, stats_dict, detection_time = face_quality_cpp.analyze_face_quality_with_timing(
                         self.vertices, self.faces, self.threshold)
                     
                     # 保存结果和统计信息
-                    self.result['selected_faces'] = low_quality_faces
-                    self.stats = stats_dict
+                    self.result['selected_faces'] = low_quality_faces if low_quality_faces is not None else []
+                    self.stats = stats_dict if stats_dict is not None else {}
                     cpp_success = True
                     
                     total_time = time.time() - start_time
@@ -72,19 +74,19 @@ class FaceQualityAlgorithm(BaseAlgorithm):
                     
                 except Exception as e:
                     # 如果C++调用失败，回退到Python实现
-                    self.update_progress(15, f"C++调用失败: {str(e)[:50]}...\n使用Python算法...")
+                    if progress: self.update_progress(15, f"C++调用失败: {str(e)[:50]}...\n使用Python算法...")
             
             # 如果C++未成功，使用Python算法
             if not cpp_success:
-                self.update_progress(10, "使用Python算法分析面片质量...")
-                self.analyze_face_quality()
+                if progress: self.update_progress(10, "使用Python算法分析面片质量...")
+                self.analyze_face_quality(progress)
                 
                 total_time = time.time() - start_time
                 self.message = self.generate_quality_report()
                 self.message += f"\n\nPython算法用时: {total_time:.4f}秒"
             
-            self.update_progress(100)
-            self.close_progress_dialog()
+            if progress: self.update_progress(100)
+            if progress: self.close_progress_dialog()
             
             # 将统计信息添加到结果中
             self.result['stats'] = self.stats
@@ -97,12 +99,18 @@ class FaceQualityAlgorithm(BaseAlgorithm):
         except Exception as e:
             import traceback
             error_msg = f"面片质量分析失败: {str(e)}\n{traceback.format_exc()}"
-            self.close_progress_dialog()
+            if progress: self.close_progress_dialog()
             if parent:
                 self.show_message(parent, "错误", error_msg, icon="critical")
+            if self.result is None:
+                self.result = {'selected_faces': [], 'stats': {}}
+            elif 'selected_faces' not in self.result:
+                self.result['selected_faces'] = []
+            if 'stats' not in self.result:
+                self.result['stats'] = {}
             return self.result
     
-    def analyze_face_quality(self):
+    def analyze_face_quality(self, progress=None):
         """
         使用STAR-CCM+的算法分析面片质量
         
@@ -132,12 +140,14 @@ class FaceQualityAlgorithm(BaseAlgorithm):
         
         total_faces = len(self.faces)
         
+        if progress: self.update_progress(10, f"分析 {total_faces} 个面片...")
+        
         # 分析每个面片的质量
         for i, face in enumerate(self.faces):
             # 更新进度
-            if i % 100 == 0:
-                progress = 10 + int(85 * i / total_faces)
-                self.update_progress(progress, f"分析面片 {i+1}/{total_faces}")
+            if progress and i % 100 == 0:
+                progress_val = 10 + int(85 * i / total_faces)
+                self.update_progress(progress_val, f"分析面片 {i+1}/{total_faces}")
                 if self.progress_dialog and self.progress_dialog.wasCanceled():
                     break
             
@@ -186,7 +196,11 @@ class FaceQualityAlgorithm(BaseAlgorithm):
             self.stats['avg_quality'] = 0.0
         
         # 更新结果
+        if self.result is None:
+            self.result = {}
         self.result['selected_faces'] = self.stats['low_quality_faces']
+        
+        if progress: self.update_progress(95, "完成")
         
         return self.result
     

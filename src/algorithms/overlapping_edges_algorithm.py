@@ -45,19 +45,21 @@ class OverlappingEdgesAlgorithm(BaseAlgorithm):
             self.tolerance = tolerance
             
         if not self.set_mesh_data(self.mesh_data):
-            self.show_message(parent, "警告", "缺少有效的网格数据", icon="warning")
-            self.message_shown = True
+            if parent:
+                self.show_message(parent, "警告", "缺少有效的网格数据", icon="warning")
+                self.message_shown = True
             return self.result
         
-        # 显示进度对话框
-        progress = self.show_progress_dialog(parent, "重叠边检测", "正在检测重叠边...", 100)
+        progress = None
+        if parent:
+            progress = self.show_progress_dialog(parent, "重叠边检测", "正在检测重叠边...", 100)
         
         start_time = time.time()
         
         try:
             # 尝试使用C++实现
             if self.use_cpp and HAS_CPP_MODULE:
-                self.update_progress(10, "使用C++算法检测重叠边...")
+                if progress: self.update_progress(10, "使用C++算法检测重叠边...")
                 
                 # 确保顶点和面片数据是numpy数组
                 vertices_array = np.array(self.vertices, dtype=np.float64)
@@ -76,19 +78,20 @@ class OverlappingEdgesAlgorithm(BaseAlgorithm):
                 print(f"C++重叠边检测用时: {detection_time:.4f}秒")
             else:
                 # 使用Python算法
-                self.update_progress(10, "使用Python算法检测重叠边...")
+                if progress: self.update_progress(10, "使用Python算法检测重叠边...")
                 python_start = time.time()
-                self.detect_overlapping_edges_python()
+                self.detect_overlapping_edges_python(progress)
                 python_time = time.time() - python_start
                 
                 total_time = time.time() - start_time
-                self.message = f"检测到{len(self.result['selected_edges'])}条重叠边\nPython算法用时: {python_time:.4f}秒 (总用时: {total_time:.4f}秒)"
+                num_edges = len(self.result.get('selected_edges', []))
+                self.message = f"检测到{num_edges}条重叠边\nPython算法用时: {python_time:.4f}秒 (总用时: {total_time:.4f}秒)"
                 
                 # 打印性能信息
                 print(f"Python重叠边检测用时: {python_time:.4f}秒")
             
-            self.update_progress(100)
-            self.close_progress_dialog()
+            if progress: self.update_progress(100)
+            if progress: self.close_progress_dialog()
             
             if parent:
                 self.show_message(parent, "重叠边检测完成", self.message)
@@ -97,13 +100,17 @@ class OverlappingEdgesAlgorithm(BaseAlgorithm):
             return self.result
             
         except Exception as e:
-            self.close_progress_dialog()
+            if progress: self.close_progress_dialog()
             if parent:
                 self.show_message(parent, "错误", f"重叠边检测失败: {str(e)}", icon="critical")
                 self.message_shown = True
+            if self.result is None:
+                self.result = {'selected_edges': []}
+            elif 'selected_edges' not in self.result:
+                self.result['selected_edges'] = []
             return self.result
     
-    def detect_overlapping_edges_python(self):
+    def detect_overlapping_edges_python(self, progress=None):
         """
         使用Python算法检测重叠边
         
@@ -114,7 +121,14 @@ class OverlappingEdgesAlgorithm(BaseAlgorithm):
         edge_indices = {}  # 存储每条边对应的原始顶点索引
         
         # 遍历所有面片，收集边信息
-        for face in self.faces:
+        total_faces = len(self.faces)
+        for idx, face in enumerate(self.faces):
+            # 更新进度 (仅在 progress 存在时)
+            if progress and idx % 100 == 0: # 每处理100个面片更新一次
+                # 假设Python检测主要耗时在面片遍历
+                progress_value = 10 + int(80 * idx / total_faces)
+                self.update_progress(progress_value, f"处理面片 {idx+1}/{total_faces}")
+
             # 获取面片的三条边
             edges = [
                 (face[0], face[1]),
@@ -141,13 +155,19 @@ class OverlappingEdgesAlgorithm(BaseAlgorithm):
                     edge_count[geo_key] += 1
                 else:
                     edge_count[geo_key] = 1
-                    edge_indices[geo_key] = (v1_idx, v2_idx)
+                    edge_indices[geo_key] = tuple(sorted((v1_idx, v2_idx))) # 存为排序后的元组
         
         # 找出出现超过2次的边（重叠边）
         overlapping_edges = [edge_indices[geo_key] for geo_key, count in edge_count.items() if count > 2]
         
-        # 更新结果
+        # 更新结果 (确保 self.result 是字典)
+        if self.result is None:
+            self.result = {}
         self.result['selected_edges'] = overlapping_edges
+
+        # 进度更新 - 完成Python部分
+        if progress: self.update_progress(95, "完成边计数")
+
         return overlapping_edges
     
     def get_edge_geo_key(self, v1, v2):

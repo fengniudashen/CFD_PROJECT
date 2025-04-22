@@ -69,17 +69,11 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
         return self.detect_pierced_faces(parent)
     
     def detect_pierced_faces(self, parent=None):
-        """
-        执行穿刺面检测
-        
-        参数:
-        parent: 父窗口，用于显示界面元素
-        
-        返回:
-        dict: 结果字典，包含selected_faces
-        """
-        # 显示进度对话框
-        progress = self.show_progress_dialog(parent, "穿刺面检测", "正在检测穿刺面...", 100)
+        """检测穿刺面"""
+        # 只有在 parent 不为 None 时才显示进度对话框
+        progress = None
+        if parent:
+            progress = self.show_progress_dialog(parent, "穿刺面检测", "正在检测穿刺面...", 100)
         
         # 确保result是字典
         if self.result is None:
@@ -99,16 +93,16 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                 # 检查是否是局部检测模式
                 is_local_detection = hasattr(self, 'target_faces') and self.target_faces
                 if is_local_detection:
-                    self.update_progress(10, "使用C++算法进行局部穿刺面检测...")
+                    if progress: self.update_progress(10, "使用C++算法进行局部穿刺面检测...")
                     print(f"局部检测模式: 检测 {len(self.target_faces)} 个指定面片")
                 else:
-                    self.update_progress(10, "使用C++算法进行全局穿刺面检测...")
+                    if progress: self.update_progress(10, "使用C++算法进行全局穿刺面检测...")
                     print("全局检测模式: 检测所有面片")
                 
                 try:
                     # 尝试使用新版C++模块(返回相交映射)
                     if hasattr(self, 'enhanced_cpp_available') and self.enhanced_cpp_available:
-                        self.update_progress(15, "使用增强版C++算法(支持相交映射)...")
+                        if progress: self.update_progress(15, "使用增强版C++算法(支持相交映射)...")
                         intersecting_faces, intersection_map, detection_time = pierced_faces_cpp.detect_pierced_faces_with_timing(
                             self.faces, self.vertices)
                         
@@ -120,7 +114,7 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                         
                         # 如果是局部检测，过滤结果只保留目标面片及与其相交的面片
                         if is_local_detection:
-                            self.update_progress(80, "局部检测模式: 过滤检测结果...")
+                            if progress: self.update_progress(80, "局部检测模式: 过滤检测结果...")
                             # 创建一个新的结果集，只包含target_faces和与其相交的面片
                             filtered_faces = set()
                             filtered_map = {}
@@ -148,7 +142,7 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                     else:
                         # 尝试使用增强版API，如果失败则回退
                         try:
-                            self.update_progress(15, "尝试使用增强版C++算法...")
+                            if progress: self.update_progress(15, "尝试使用增强版C++算法...")
                             intersecting_faces, intersection_map, detection_time = pierced_faces_cpp.detect_pierced_faces_with_timing(
                                 self.faces, self.vertices)
                             
@@ -160,7 +154,7 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                             
                             # 如果是局部检测，过滤结果只保留目标面片及与其相交的面片
                             if is_local_detection:
-                                self.update_progress(80, "局部检测模式: 过滤检测结果...")
+                                if progress: self.update_progress(80, "局部检测模式: 过滤检测结果...")
                                 # 创建一个新的结果集，只包含target_faces和与其相交的面片
                                 filtered_faces = set()
                                 filtered_map = {}
@@ -188,7 +182,7 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                         except ValueError:
                             # 如果是旧版C++模块，回退到只返回面片列表的版本
                             print("警告: 使用的是旧版C++模块，将进行相交关系手动计算")
-                            self.update_progress(15, "使用基础版C++算法(需要构建相交映射)...")
+                            if progress: self.update_progress(15, "使用基础版C++算法(需要构建相交映射)...")
                             all_intersecting_faces = [] # 初始化以防 try 块失败
                             detection_time = 0          # 初始化以防 try 块失败
                             try:
@@ -207,12 +201,11 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                             except Exception as e:
                                 print(f"旧版C++模块调用失败: {e}")
                                 # 出错时设置空结果 (已在try块前初始化)
-                                # self.used_enhanced_cpp = False # 标记未使用增强版 - 这行应移到后面处理
                                 
                             # --- 这部分逻辑现在应该在 except ValueError 内部，但在 try/except Exception 之后 ---
                             # 如果是局部检测，过滤结果只保留目标面片及相关面片
                             if is_local_detection:
-                                self.update_progress(60, "局部检测模式: 过滤检测结果...")
+                                if progress: self.update_progress(60, "局部检测模式: 过滤检测结果...")
                                 # 确保 all_intersecting_faces 是列表
                                 if not isinstance(all_intersecting_faces, list):
                                      all_intersecting_faces = []
@@ -229,7 +222,7 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                             
                             # 由于C++模块当前版本不返回相交映射，我们需要重建它
                             # 这里使用一个简化的重建过程，检测不共享顶点的面之间的交叉
-                            self.update_progress(70, "构建面相交映射...")
+                            if progress: self.update_progress(70, "构建面相交映射...")
                             
                             # 确定要检查的面片
                             if not isinstance(intersecting_faces, list):
@@ -239,7 +232,7 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                             # 对于每个检测到的相交面，找出它与哪些面相交
                             for i, face_idx in enumerate(faces_to_check):
                                 if i % 10 == 0:
-                                    self.update_progress(70 + int(20 * i / len(faces_to_check)), f"构建相交映射 {i+1}/{len(faces_to_check)}")
+                                    if progress: self.update_progress(70 + int(20 * i / len(faces_to_check)), f"构建相交映射 {i+1}/{len(faces_to_check)}")
                                     
                                 # 获取当前面片的顶点
                                 face_i = self.faces[face_idx]
@@ -271,8 +264,8 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                 except ValueError as e:
                     # 这个异常处理的是增强版 C++ 模块检测失败的情况
                     print(f"错误: C++模块实现不一致或增强版检测失败: {e}")
-                    self.update_progress(15, "C++模块出错，回退到Python算法...")
-                    self.detect_pierced_faces_python()
+                    if progress: self.update_progress(15, "C++模块出错，回退到Python算法...")
+                    self.detect_pierced_faces_python(progress)
                     self.used_enhanced_cpp = False
                     # --- 设置标志，表示使用了 Python 回退 --- 
                     python_fallback_used = True 
@@ -310,8 +303,8 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
 
             else: # --- 这个 else 对应 if self.use_cpp and HAS_PIERCED_FACES_CPP: ---
                 # 使用Python算法
-                self.update_progress(10, "使用Python算法检测穿刺面...")
-                self.detect_pierced_faces_python()
+                if progress: self.update_progress(10, "使用Python算法检测穿刺面...")
+                self.detect_pierced_faces_python(progress)
                 
                 total_time = time.time() - start_time
                 detection_mode = "局部" if hasattr(self, 'target_faces') and self.target_faces else "全局"
@@ -331,7 +324,6 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                 self.message_shown = True
             
             return self.result
-        # --- 修复：主 try 块的 except 块缩进 --- 
         except Exception as e:
             traceback.print_exc()
             self.close_progress_dialog()
@@ -339,164 +331,75 @@ class CombinedIntersectionAlgorithm(BaseAlgorithm):
                 self.show_message(parent, "错误", f"穿刺面检测失败: {str(e)}", icon="critical")
             return self.result
     
-    def detect_pierced_faces_python(self):
-        """
-        使用Python算法检测穿刺面
-        """
-        # 确保result是字典
-        if self.result is None:
-            self.result = {
-                'selected_points': [],
-                'selected_edges': [],
-                'selected_faces': [],
-                'intersection_map': {},
-                'total_intersections': 0
-            }
-            
-        # 存储相交面片及其相交关系
+    def detect_pierced_faces_python(self, progress=None):
+        """使用Python进行穿刺面检测"""
+        n_faces = len(self.faces)
         intersecting_faces = set()
-        self.face_intersection_map = {}  # 键为面片索引，值为与之相交的面片索引集合
+        self.face_intersection_map = {} # 初始化相交映射
+        self.detection_time = 0 # Python 实现暂时不精确计时
         
-        try:
-            # 计算每个面片的AABB包围盒
-            face_bboxes = AlgorithmUtils.calculate_face_bboxes(self.faces, self.vertices)
+        # 优化：仅检查可能相交的面片对（例如基于包围盒）
+        start_build_time = time.time()
+        octree = self.build_octree()
+        end_build_time = time.time()
+        print(f"八叉树构建耗时: {end_build_time - start_build_time:.4f} 秒")
+        
+        # 用于存储潜在相交的面片对，避免重复检查
+        potential_pairs = set()
             
-            self.update_progress(30, "计算八叉树空间分区...")
-            # 构建八叉树
-            octree_start = time.time()
-            root = None # 初始化根节点
-            try:
-                root = AlgorithmUtils.create_octree(self.faces, self.vertices)
-            except Exception as e:
-                print(f"构建八叉树失败: {e}")
-                # root is already None
-                
-            octree_time = time.time() - octree_start
-                
-            # 如果八叉树构建失败，提前返回空结果
-            if root is None:
-                print("警告: 八叉树构建失败，无法执行穿刺面检测")
-                self.result['selected_faces'] = []
-                self.result['intersection_map'] = {}
-                self.result['total_intersections'] = 0
-                return self.result
-            
-            self.update_progress(40, "检测穿刺面...")
-            
-            # 对每个面片，查询八叉树找出可能的交叉
-            detection_start = time.time()
-            total_faces = len(self.faces)
-            
-            # 确定要检测的面片
-            faces_to_check = []
-            if hasattr(self, 'target_faces') and self.target_faces:
-                # 如果有指定的目标面片，只检测这些面片
-                print(f"局部检测模式: 检测 {len(self.target_faces)} 个指定面片")
-                faces_to_check = list(self.target_faces)
-            else:
-                # 否则检测所有面片
-                print("全局检测模式: 检测所有面片")
-                faces_to_check = list(range(total_faces))
-            
-            # 定义八叉树查询函数
-            def query_octree(node, face_idx):
-                # 如果节点为空，直接返回
-                if node is None:
-                    return
-                
-                try:
-                    # 获取当前面片的顶点
-                    face_verts = self.vertices[self.faces[face_idx]]
-                    # 计算面片的AABB包围盒
-                    min_coords = np.min(face_verts, axis=0)
-                    max_coords = np.max(face_verts, axis=0)
+        # 查询八叉树获取潜在相交对
+        start_query_time = time.time()
+        for face_idx in range(n_faces):
+            if progress and face_idx % 50 == 0:
+                self.update_progress(10 + int(30 * face_idx / n_faces), f"查询八叉树 {face_idx+1}/{n_faces}")
+            potential_partners = query_octree(octree, face_idx)
+            for partner_idx in potential_partners:
+                # 确保存储的对是唯一的(较小索引在前)
+                if face_idx < partner_idx:
+                    potential_pairs.add((face_idx, partner_idx))
+                else:
+                    potential_pairs.add((partner_idx, face_idx))
+        end_query_time = time.time()
+        print(f"八叉树查询耗时: {end_query_time - start_query_time:.4f} 秒, 找到 {len(potential_pairs)} 对潜在相交面片")
                     
-                    # 检查当前面片与节点内所有面片的交叉
-                    for other_idx in node.face_indices:
-                        # 不检查自身
-                        if other_idx == face_idx:
-                            continue
-                        
-                        try:
-                            # 快速AABB包围盒检测
-                            other_min, other_max = face_bboxes[other_idx]
-                            if np.all(max_coords >= other_min) and np.all(other_max >= min_coords):
-                                # 获取另一个面片的顶点
-                                face2_verts = self.vertices[self.faces[other_idx]]
-                                
-                                # 只有当两个面片不共享顶点时才检查相交
-                                if not set(self.faces[face_idx]).intersection(set(self.faces[other_idx])):
-                                    if AlgorithmUtils.check_triangle_intersection(face_verts, face2_verts):
-                                        # 记录相交的面片
-                                        intersecting_faces.add(face_idx)
-                                        intersecting_faces.add(other_idx)
+        # 检查潜在相交的面片对
+        start_check_time = time.time()
+        checked_count = 0
+        for idx, (i, j) in enumerate(potential_pairs):
+            if progress and idx % 100 == 0:
+                 progress_val = 40 + int(60 * idx / len(potential_pairs))
+                 self.update_progress(progress_val, f"检查相交对 {idx+1}/{len(potential_pairs)}")
+            
+            face_i = self.faces[i]
+            face_j = self.faces[j]
+            face_i_verts = [self.vertices[face_i[0]], self.vertices[face_i[1]], self.vertices[face_i[2]]]
+            face_j_verts = [self.vertices[face_j[0]], self.vertices[face_j[1]], self.vertices[face_j[2]]]
+            
+            if AlgorithmUtils.check_triangle_intersection(face_i_verts, face_j_verts):
+                intersecting_faces.add(i)
+                intersecting_faces.add(j)
                                         
-                                        # 记录相交关系
-                                        if face_idx not in self.face_intersection_map:
-                                            self.face_intersection_map[face_idx] = set()
-                                        if other_idx not in self.face_intersection_map:
-                                            self.face_intersection_map[other_idx] = set()
-                                            
-                                        self.face_intersection_map[face_idx].add(other_idx)
-                                        self.face_intersection_map[other_idx].add(face_idx)
-                        except Exception as e:
-                            print(f"处理面片对 {face_idx} 和 {other_idx} 时出错: {e}")
-                            continue  # 继续检查下一个面片
-                    
-                    # 检查子节点
-                    if node.children is not None:
-                        for child in node.children:
-                            query_octree(child, face_idx)
-                except Exception as e:
-                    print(f"处理面片 {face_idx} 时出错: {e}")
-                    # 不需要 return，让函数自然结束
+                # 更新相交映射
+                if i not in self.face_intersection_map:
+                    self.face_intersection_map[i] = set()
+                if j not in self.face_intersection_map:
+                    self.face_intersection_map[j] = set()
+                self.face_intersection_map[i].add(j)
+                self.face_intersection_map[j].add(i)
             
-            # 使用八叉树查询
-            total_to_check = len(faces_to_check)
-            for idx, face_idx in enumerate(faces_to_check):
-                # 更新进度
-                if idx % 10 == 0:
-                    progress_value = 40 + int(55 * idx / total_to_check)
-                    self.update_progress(progress_value, f"检测穿刺面 {idx+1}/{total_to_check}")
-                    if self.progress_dialog and self.progress_dialog.wasCanceled():
-                        break
-                
-                try:
-                    query_octree(root, face_idx)
-                except Exception as e:
-                    print(f"查询面片 {face_idx} 时出错: {e}")
-                    continue  # 继续检查下一个面片
+            checked_count += 1
+        
+        end_check_time = time.time()
+        print(f"相交检查耗时: {end_check_time - start_check_time:.4f} 秒, 检查了 {checked_count} 对")
+        
+        # 确保 result 是字典
+        if self.result is None:
+            self.result = {}
             
-            detection_time = time.time() - detection_start
-            total_time = detection_time + octree_time
-            
-            self.update_progress(95, "整理结果...")
-            
-            # 计算相交关系总数
-            total_intersections = sum(len(faces) for faces in self.face_intersection_map.values())
-            
-            # 更新结果
             self.result['selected_faces'] = list(intersecting_faces)
-            self.result['intersection_map'] = {str(k): list(v) for k, v in self.face_intersection_map.items()}
-            self.result['total_intersections'] = total_intersections // 2  # 除以2因为每个关系被计算了两次
-            
-            # 更新消息
-            mode_type = "局部" if hasattr(self, 'target_faces') and self.target_faces else "全局"
-            self.message = f"{mode_type}检测: 发现{len(intersecting_faces)}个穿刺面\n相交关系数量: {total_intersections//2}个\n八叉树构建: {octree_time:.4f}秒\n检测用时: {detection_time:.4f}秒\n总用时: {total_time:.4f}秒"
-        
-        except Exception as e:
-            print(f"Python穿刺面检测失败: {e}")
-            traceback.print_exc()
-            
-            # 确保在出错时返回有效结果
-            self.result['selected_faces'] = list(intersecting_faces) if intersecting_faces else []
-            self.result['intersection_map'] = {str(k): list(v) for k, v in self.face_intersection_map.items()} if self.face_intersection_map else {}
-            self.result['total_intersections'] = 0
-            
-            self.message = f"Python穿刺面检测失败: {str(e)}"
-        
-        # 最终返回结果
-        return self.result
+        # Python实现中face_intersection_map已经在此方法内构建
+        # 可以在此函数末尾或finally块中统一设置self.result['intersection_map']
+        # self.result['intersection_map'] = self.face_intersection_map
     
     # 以下是几何计算辅助函数，用于穿刺面检测
     
